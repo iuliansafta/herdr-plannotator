@@ -1,14 +1,14 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, panes, run, theme } from "herdr";
+import { props, focused, run, theme } from "herdr";
 import * as P from "./vendor/plannotator.js";
 import { Api, loadSession } from "./api.js";
 import { DocumentView } from "./doc/index.js";
 import { ReviewView } from "./review/index.js";
 
-const MOD = "plannotator";
 const CLOSE_AFTER_MS = 2000;
 const DRAFT_DEBOUNCE_MS = 800;
+const LIVENESS_MS = 4000;
 
 const TITLES = { plan: "Plan review", annotate: "Annotate", review: "Code review", archive: "Plan archive" };
 const DONE_TEXT = {
@@ -16,6 +16,7 @@ const DONE_TEXT = {
   denied: "Feedback sent to the agent.",
   sent: "Feedback sent to the agent.",
   exited: "Closed without feedback.",
+  gone: "This Plannotator session has ended. Close this pane.",
 };
 
 // Each decision: which buttons a mode shows, and what pressing one does.
@@ -55,9 +56,22 @@ export default class Plannotator extends View {
         this.view?.init(cx);
         await this.restoreDraft();
         this.state = { name: "ready" };
+        cx.timer.every(LIVENESS_MS, (cx) => this.checkAlive(cx));
       } catch (e) {
         this.state = { name: "error", message: String(e?.message ?? e) };
       }
+      cx.notify();
+    });
+  }
+
+  // The server stops once a decision lands anywhere (this pane, the browser,
+  // the agent's process going away); fetch then rejects.
+  checkAlive(cx) {
+    if (this.state.name !== "ready") return;
+    cx.spawn(async (cx) => {
+      const alive = await this.api.get("/api/draft").then(() => true, () => false);
+      if (alive || this.state.name !== "ready") return;
+      this.state = { name: "done", outcome: "gone" };
       cx.notify();
     });
   }
@@ -99,6 +113,8 @@ export default class Plannotator extends View {
 
   decide(action, cx) {
     if (this.state.name !== "ready") return;
+    // Clicking a mod pane focuses it, so this is our own pane.
+    this.ownPane = focused()?.pane ?? null;
     this.state = { name: "submitting", action: action.id };
     this.toast = null;
     cx.notify();
@@ -117,8 +133,7 @@ export default class Plannotator extends View {
   }
 
   closePane() {
-    const own = props()?.pane ?? panes().find((p) => p.mod === MOD && p.focused)?.pane;
-    if (own) run("pane.close", { pane: own });
+    if (this.ownPane) run("pane.close", { pane: this.ownPane });
   }
 
   openInBrowser(cx) {
