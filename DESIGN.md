@@ -162,10 +162,10 @@ load, so tests can drive the view on a screen nobody clicks.
 ## Dev loop
 
 ```sh
-tools/test-screen.sh start                      # hidden X11 herdr screen
+HPT=hpt-<you> tools/test-screen.sh start      # your own hidden X11 herdr screen (HPT names it)
 plannotator annotate x.md --browser none &      # prints the session URL on stderr
-tools/dev-open.sh plannotator <url> shot.png    # new tab on the test screen + screenshot
-HERDR_APP_HOME=/run/user/$UID/hpt herdr-app do tab.close --id <tab> --confirmed true
+HPT=hpt-<you> tools/dev-open.sh plannotator <url> shot.png   # new tab on it + screenshot
+HERDR_APP_HOME=/run/user/$UID/hpt-<you> herdr-app do tab.close --id <tab> --confirmed true
 ```
 
 `herdr-app shot` returns the last frame of the test screen only.

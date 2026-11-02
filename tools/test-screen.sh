@@ -3,7 +3,7 @@
 # hidden Hyprland workspace, sharing herdr-core but not focus with the user's
 # window. Usage: test-screen.sh start|stop|status
 set -eu
-HOME_DIR=/run/user/$(id -u)/hpt
+HOME_DIR=/run/user/$(id -u)/${HPT:-hpt}
 MOD_DIR=$(cd "$(dirname "$0")/../mod" && pwd)
 find_pid() { pgrep -f "^$HOME/.local/bin/herdr-app$" | while read -r p; do tr '\0' '\n' </proc/$p/environ | grep -qx "HERDR_APP_HOME=$HOME_DIR" && echo "$p"; done | head -1; }
 case "${1:-status}" in
