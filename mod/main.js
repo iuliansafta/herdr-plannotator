@@ -161,7 +161,8 @@ export default class Plannotator extends View {
     const data = this.session?.data ?? {};
     const subtitle = data.filePath ?? data.gitRef ?? data.origin ?? "";
     const busy = this.state.name !== "ready";
-    const actions = (ACTIONS[kind] ?? []).filter((a) => !a.when || a.when(data));
+    const done = this.state.name === "done";
+    const actions = done ? [] : (ACTIONS[kind] ?? []).filter((a) => !a.when || a.when(data));
     return h_flex()
       .flex_none()
       .h(44)
@@ -173,7 +174,7 @@ export default class Plannotator extends View {
       .border_color(t.border)
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child(TITLES[kind] ?? "Plannotator"))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(String(subtitle)))
-      .when(!!this.api, (el) => el.child(this.button(t, "open-browser", "Open in browser", (cx) => this.openInBrowser(cx))))
+      .when(!!this.api && !done, (el) => el.child(this.button(t, "open-browser", "Open in browser", (cx) => this.openInBrowser(cx))))
       .children(actions.map((a) => this.button(t, `act-${a.id}`, this.state.action === a.id ? "Sending…" : a.label, (cx) => this.decide(a, cx), { primary: a.primary, disabled: busy })));
   }
 
