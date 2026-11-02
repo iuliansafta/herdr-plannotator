@@ -1,0 +1,56 @@
+#!/bin/sh
+# Open Plannotator sessions in a herdr-app pane instead of a browser.
+#
+#   plannotator-herdr <http://...>      browser mode: Plannotator runs this as
+#                                       PLANNOTATOR_BROWSER and waits for it, so
+#                                       it opens the pane and returns at once.
+#   plannotator-herdr <plannotator args> wrapper mode: runs plannotator with
+#                                       this script as its browser.
+#
+# PLANNOTATOR_HERDR_PLACE: right (default), down, or tab.
+set -eu
+
+self=$(readlink -f "$0")
+
+case "${1:-}" in
+http://* | https://*) ;;
+*) PLANNOTATOR_BROWSER=$self exec plannotator "$@" ;;
+esac
+
+url=$1
+fallback() {
+  echo "plannotator-herdr: $1; opening the browser instead" >&2
+  exec xdg-open "$url"
+}
+
+command -v herdr-app >/dev/null 2>&1 || fallback "herdr-app not found"
+command -v jq >/dev/null 2>&1 || fallback "jq not found"
+herdr-app status >/dev/null 2>&1 || fallback "no herdr window"
+
+props=$(jq -cn --arg url "$url" '{url: $url}')
+place=${PLANNOTATOR_HERDR_PLACE:-right}
+
+# The pane of the terminal that started plannotator (the agent's), when it is
+# one of this machine's terminals in the window.
+pane=""
+if [ -n "${HC_TERMINAL_ID:-}" ]; then
+  pane=$(herdr-app ls | jq -r --arg t "$HC_TERMINAL_ID" \
+    'first(.spaces[] | select(.machine == null) | .tabs[].terminals[] | select(.terminal == $t) | .pane) // empty')
+fi
+
+if [ -n "$pane" ] && [ "$place" != tab ]; then
+  herdr-app do pane.split --direction "$place" --pane "$pane" --mod plannotator --props "$props" >/dev/null &&
+    exit 0
+fi
+
+space=""
+if [ -n "$pane" ]; then
+  space=$(herdr-app ls | jq -r --arg p "$pane" \
+    'first(.spaces[] | select(any(.tabs[].terminals[]; .pane == $p)) | .id) // empty')
+fi
+if [ -n "$space" ]; then
+  herdr-app do tab.new --space "$space" --name Plannotator --mod plannotator --props "$props" >/dev/null && exit 0
+else
+  herdr-app do tab.new --name Plannotator --mod plannotator --props "$props" >/dev/null && exit 0
+fi
+fallback "herdr-app could not open the pane"

@@ -12,6 +12,9 @@ start)
   mkdir -p "$HOME_DIR/mods"
   cp ~/.config/herdr-app/settings.json ~/.config/herdr-app/seen.json "$HOME_DIR/" 2>/dev/null || true
   ln -sfn "$MOD_DIR" "$HOME_DIR/mods/plannotator"
+  welcomed=$(jq -c '.["frame.welcomed"] // true' ~/.config/herdr-app/shared.json 2>/dev/null || echo true)
+  shared=$HOME_DIR/shared.json; [ -f "$shared" ] || echo '{}' >"$shared"
+  jq --argjson w "$welcomed" '.["frame.welcomed"] = $w' "$shared" >"$shared.tmp" && mv "$shared.tmp" "$shared"
   (HERDR_APP_HOME=$HOME_DIR env -u WAYLAND_DISPLAY setsid nohup "$HOME/.local/bin/herdr-app" >"$HOME_DIR.log" 2>&1 &)
   for _ in $(seq 1 60); do
     pid=$(find_pid); addr=$([ -n "$pid" ] && hyprctl clients -j | jq -r --argjson p "$pid" '.[] | select(.pid==$p) | .address' || true)
@@ -19,7 +22,7 @@ start)
   done
   [ -n "${addr:-}" ] || { echo "test screen did not start; see $HOME_DIR.log" >&2; exit 1; }
   hyprctl dispatch "hl.dsp.window.move({ workspace = 'special:herdrtest', follow = false, window = 'address:$addr' })" >/dev/null
-  sleep 2; HERDR_APP_HOME=$HOME_DIR herdr-app do overlay.close >/dev/null 2>&1 || true
+  sleep 2
   echo "started pid $pid";;
 stop) pid=$(find_pid); [ -n "$pid" ] && kill "$pid"; echo stopped;;
 status) pid=$(find_pid); echo "${pid:-not running}";;
