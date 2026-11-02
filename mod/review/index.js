@@ -1,5 +1,6 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, Popover, TextareaState, Textarea, VirtualListScrollHandle } from "gpui-base";
+import { show_fps_monitor } from "gpui-fps";
 import { theme, settings, props, exec } from "herdr";
 import { parsePatch } from "./patch.js";
 import { fileLines, rangeOf, lineComment, fileComment, generalComment, buildRows, scopeOf, lineLabel } from "./model.js";
@@ -7,7 +8,7 @@ import { fileLines, rangeOf, lineComment, fileComment, generalComment, buildRows
 const STATUS = { added: ["A", "ansi2"], deleted: ["D", "ansi1"], renamed: ["R", "ansi4"], modified: ["M", "ansi3"] };
 const REPLAY_DELAY_MS = 600;
 const LINE_H = 20, HUNK_H = 24, GUTTER_W = 104, CHAR_W = 7.3;
-const NARROW = 1150;
+const NARROW = 1150, NOTES_W = 300;
 
 // Contract with main.js (see DESIGN.md, "View contract"). Every handler calls
 // one named method through act(); props().script replays the same methods.
@@ -49,7 +50,9 @@ export class ReviewView {
     await this.progressLoad;
     for (const [name, ...args] of script) {
       const before = this.annotations;
-      try { await this[name](...args); }
+      // "$annN" stands for the id of the Nth annotation, which a script cannot know ahead.
+      const resolved = args.map((v) => (typeof v === "string" && /^\$ann\d+$/.test(v) ? this.annotations[+v.slice(4)]?.id : v));
+      try { await this[name](...resolved); }
       catch (e) { console.log(`replay ${name}: ${e?.message ?? e}`); }
       this.settle(before, cx);
     }
@@ -94,7 +97,7 @@ export class ReviewView {
     const file = this.file;
     if (!file) return { rows: [], sizes: [], width: 0 };
     const c = this.rowsCache;
-    const key = { file, annotations: this.annotations, selection: this.selection, diffW: this.diffW };
+    const key = { file, annotations: this.annotations, selection: this.selection, diffW: this.diffWidth() };
     if (c && Object.keys(key).every((k) => c.key[k] === key[k])) return c;
     const rows = buildRows(file, this.annotations, this.selection);
     const noteW = this.noteWidth();
@@ -104,8 +107,17 @@ export class ReviewView {
     return this.rowsCache;
   }
 
+  // on_size_change reports only on the root, so the diff column's width is derived.
+  diffWidth() {
+    return (this.width ?? NARROW) - this.filesWidth() - (this.notesShown() ? NOTES_W : 0);
+  }
+
+  filesWidth() {
+    return this.narrow() ? 230 : 270;
+  }
+
   noteWidth() {
-    return Math.max(220, Math.min(720, (this.diffW ?? 600) - GUTTER_W - 32));
+    return Math.max(200, Math.min(720, this.diffWidth() - GUTTER_W - 24));
   }
 
   author() {
@@ -260,6 +272,16 @@ export class ReviewView {
     this.notesOpen = !this.notesOpen;
   }
 
+  /** Dev: scrolls the diff to row `i`. */
+  scrollTo(i) {
+    this.scroll.scroll_to_item(i, "top");
+  }
+
+  /** Dev: the frame-time HUD. */
+  fps() {
+    show_fps_monitor({ anchor: "bottom_left" });
+  }
+
   /** Dev: writes the annotations as JSON to `path`. */
   async dump(path) {
     await exec("sh", ["-c", 'printf %s "$1" > "$2"', "sh", JSON.stringify(this.annotations), path]);
@@ -346,7 +368,7 @@ export class ReviewView {
   fileList(t) {
     const counts = {};
     for (const a of this.annotations) if (a.filePath) counts[a.filePath] = (counts[a.filePath] ?? 0) + 1;
-    return v_flex().id("rv-files").w(this.narrow() ? 230 : 270).flex_none().min_h(0).overflow_y_scrollbar().p(6).gap(1).border_r(1).border_color(t.border).bg(t.chrome)
+    return v_flex().id("rv-files").w(this.filesWidth()).flex_none().min_h(0).overflow_y_scrollbar().p(6).gap(1).border_r(1).border_color(t.border).bg(t.chrome)
       .when(this.files.length === 0, (el) => el.child(div().p(8).text_size(12).text_color(t.dim).child("No changes in this diff.")))
       .children(this.files.map((f) => {
         const on = f.path === this.active;
@@ -384,10 +406,9 @@ export class ReviewView {
     const fileNotes = this.annotations.filter((a) => a.filePath === file.path && scopeOf(a) === "file");
     const header = h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.surface)
       .child(div().text_size(11).font_semibold().text_color(t[color]).child(letter))
-      .child(div().min_w(0).truncate().text_size(12.5).font_semibold().child(file.oldPath ? `${file.oldPath} → ${file.path}` : file.path))
-      .child(div().text_size(11.5).text_color(t.ansi2).child(`+${file.additions}`))
-      .child(div().text_size(11.5).text_color(t.ansi1).child(`−${file.deletions}`))
-      .child(div().flex_1())
+      .child(div().flex_1().min_w(40).truncate().text_size(12.5).font_semibold().child(file.oldPath ? `${file.oldPath} → ${file.path}` : file.path))
+      .child(div().flex_none().text_size(11.5).text_color(t.ansi2).child(`+${file.additions}`))
+      .child(div().flex_none().text_size(11.5).text_color(t.ansi1).child(`−${file.deletions}`))
       .child(h_flex().id("rv-viewed-head").gap(6).items_center().cursor_pointer().text_size(12).text_color(t.muted)
         .on_click((_e, cx) => this.act(cx, "toggleViewed", file.path))
         .child(this.checkbox(t, "rv-viewed-box", this.viewed.has(file.path), (cx) => this.act(cx, "toggleViewed", file.path)))
@@ -408,7 +429,6 @@ export class ReviewView {
     const font = settings().font_family ?? "JetBrains Mono";
     const noteW = this.noteWidth();
     return div().id("rv-diff-area").flex_1().min_h(0).relative().font_family(font).text_size(12)
-      .on_size_change((size, cx) => { if (size.width !== this.diffW) { this.diffW = size.width; cx.notify(); } })
       .on_mouse_down("left", (e) => { this.shift = !!e.modifiers?.shift; })
       .child(div().id("rv-diff-x").size_full().overflow_x_scrollbar()
         .child(div().w_full().min_w(width).h_full()
@@ -491,7 +511,7 @@ export class ReviewView {
     }
     const order = [...byFile.keys()].sort();
     const label = (a) => (scopeOf(a) === "file" ? "File comment" : lineLabel(a));
-    return v_flex().id("rv-notes").w(300).flex_none().min_h(0).border_l(1).border_color(t.border).bg(t.chrome)
+    return v_flex().id("rv-notes").w(NOTES_W).flex_none().min_h(0).border_l(1).border_color(t.border).bg(t.chrome)
       .child(h_flex().flex_none().h(36).px(12).items_center().border_b(1).border_color(t.border)
         .child(div().text_size(12.5).font_semibold().child(`Comments · ${this.annotations.length}`)))
       .child(v_flex().id("rv-notes-list").flex_1().min_h(0).overflow_y_scrollbar().p(8).gap(10)
