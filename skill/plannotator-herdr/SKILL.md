@@ -1,6 +1,6 @@
 ---
 name: plannotator-herdr
-description: Open a Plannotator session (annotate a file, URL or folder, review code, annotate the last message) inside the Herdr app instead of the browser. Use when the user asks to open, review or annotate something "in herdr", "in plannotator herdr", or "in a herdr pane".
+description: Open a Plannotator session (annotate a Markdown file or URL, review code, annotate the last message) inside the Herdr app instead of the browser. Use when the user asks to open, review or annotate something "in herdr", "in plannotator herdr", or "in a herdr pane".
 allowed-tools: Bash(plannotator-herdr:*)
 ---
 
@@ -21,4 +21,5 @@ exactly as the matching `plannotator-*` skill says (approved, dismissed, or
 feedback to address).
 
 If Herdr is not running, the command opens the browser instead and says so on
-stderr. Nothing else changes.
+stderr. Folders, bundles, HTML files and live apps open as a pane that offers
+**Open in browser**: the pane can't draw those, and the session is the same.
