@@ -130,3 +130,42 @@ missing: the header shows **Open in browser** in every mode.
 - End to end: a real `plannotator annotate` / `review` session, driven through
   the pane, and the CLI's stdout compared with the browser's for the same
   annotations.
+
+## View contract
+
+`main.js` owns the header, mode detection, drafts and decisions. A view owns
+its body and its annotations, nothing else. It never builds a request body.
+
+```js
+export class DocumentView {          // mod/doc/index.js   (plan + annotate)
+  constructor(host)                  // host: { session, mode, api, changed(cx) }
+  init(cx)                           // once, after the session loaded
+  render(cx)                         // the body element (fills the space under the header)
+  restore(annotations)               // from a draft
+  annotations                        // upstream Annotation[], GLOBAL_COMMENT included
+  blocks                             // the parseMarkdownToBlocks output it renders
+}
+export class ReviewView {            // mod/review/index.js
+  constructor(host) init(cx) render(cx) restore(annotations)
+  annotations                        // upstream CodeAnnotation[]
+}
+```
+
+Call `host.changed(cx)` after every annotation change: main.js saves the
+draft and redraws the header.
+
+Mouse handlers only call named methods on the view (`press(ref)`,
+`extend(ref)`, `release()`, `addComment(text)`, ...). A dev-only
+`props().script` (an array of `[method, ...args]`) replays those methods after
+load, so tests can drive the view on a screen nobody clicks.
+
+## Dev loop
+
+```sh
+tools/test-screen.sh start                      # hidden X11 herdr screen
+plannotator annotate x.md --browser none &      # prints the session URL on stderr
+tools/dev-open.sh plannotator <url> shot.png    # new tab on the test screen + screenshot
+HERDR_APP_HOME=/run/user/$UID/hpt herdr-app do tab.close --id <tab> --confirmed true
+```
+
+`herdr-app shot` returns the last frame of the test screen only.

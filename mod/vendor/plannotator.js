@@ -2262,14 +2262,6 @@ var splitQuestionAnswers = (list) => {
   }
   return { answers, annotations };
 };
-var questionItemsFromAnswers = (answers) => answers.map((a, i) => ({
-  key: a.key,
-  number: i + 1,
-  prompt: a.prompt,
-  ...a.sourceLine ? { line: a.sourceLine } : {},
-  recommendedLabels: [],
-  settled: false
-}));
 var diffBlockIndex = (ann) => {
   const match = typeof ann?.blockId === "string" ? /^diff-block-(\d+)$/.exec(ann.blockId) : null;
   return match ? Number(match[1]) : null;
@@ -2501,130 +2493,6 @@ var exportAnnotations = (blocks, allAnnotations, globalAttachments = [], title =
 ${summary}`;
   return output;
 };
-var LINKED_DOC_EXPORT_HEADING = {
-  title: "Linked Document Feedback",
-  intro: "The following feedback is on documents referenced in the plan."
-};
-var exportLinkedDocAnnotations = (docAnnotations, heading = LINKED_DOC_EXPORT_HEADING) => {
-  let output = `
-# ${heading.title}
-
-${heading.intro}
-
-`;
-  const injectedSkills = new Set;
-  for (const [filepath, { annotations: docAnnotationList, globalAttachments, blocks: docBlocks, markdown: docMarkdown, isConverted }] of docAnnotations) {
-    if (docAnnotationList.length === 0 && globalAttachments.length === 0)
-      continue;
-    const { answers, annotations } = splitQuestionAnswers(docAnnotationList);
-    output += `## ${filepath}${isConverted ? " (converted from HTML — line numbers refer to converted markdown)" : ""}
-
-`;
-    if (answers.length > 0) {
-      const questionBlocks = docBlocks ?? (docMarkdown !== undefined ? parseMarkdownToBlocks(docMarkdown) : null);
-      const items = questionBlocks ? questionExportItems(indexQuestionBlocks(questionBlocks)) : questionItemsFromAnswers(answers);
-      output += formatQuestionAnswersSection(items, answers, { headingLevel: 3 });
-    }
-    if (globalAttachments.length > 0) {
-      output += `### Reference Images
-`;
-      output += `Please review these reference images (use the Read tool to view):
-`;
-      globalAttachments.forEach((img, idx) => {
-        output += `${idx + 1}. [${img.name}] \`${img.path}\`
-`;
-      });
-      output += `
-`;
-    }
-    const sortedAnns = sortAnnotationsInDocumentOrder(annotations, docBlocks);
-    if (annotations.length > 0 || answers.length === 0) {
-      output += `I've reviewed this document and have ${annotations.length} piece${annotations.length !== 1 ? "s" : ""} of feedback:
-
-`;
-    }
-    output += renderAnnotationEntries(sortedAnns, docBlocks, { subject: "document", level: 3, injectedSkills });
-    output += labelSummaryBlock(sortedAnns, 3);
-  }
-  output += `---
-`;
-  return output;
-};
-var exportEditorAnnotations = (editorAnnotations) => {
-  if (editorAnnotations.length === 0)
-    return "";
-  let output = `
-# Editor File Annotations
-
-The following annotations reference code files in the project.
-
-`;
-  editorAnnotations.forEach((ann, index) => {
-    const lineRange = ann.lineStart === ann.lineEnd ? `line ${ann.lineStart}` : `lines ${ann.lineStart}-${ann.lineEnd}`;
-    output += `## ${index + 1}. ${ann.filePath} (${lineRange})
-`;
-    output += `\`\`\`
-${ann.selectedText}
-\`\`\`
-`;
-    if (ann.comment) {
-      output += `> ${ann.comment}
-`;
-    }
-    output += `
-`;
-  });
-  output += `---
-`;
-  return output;
-};
-var exportCodeFileAnnotations = (annotations) => {
-  if (annotations.length === 0)
-    return "";
-  let output = `
-# Code File Feedback
-
-The following feedback is on code files referenced from the reviewed document.
-
-`;
-  const injectedSkills = new Set;
-  const sorted = [...annotations].sort((a, b) => {
-    if (a.filePath !== b.filePath)
-      return a.filePath.localeCompare(b.filePath);
-    if (a.lineStart !== b.lineStart)
-      return a.lineStart - b.lineStart;
-    return a.createdAt - b.createdAt;
-  });
-  sorted.forEach((ann, index) => {
-    const lineRange = ann.lineStart === ann.lineEnd ? `line ${ann.lineStart}` : `lines ${ann.lineStart}-${ann.lineEnd}`;
-    output += `## ${index + 1}. ${ann.filePath} (${lineRange})
-`;
-    if (ann.originalCode) {
-      output += `\`\`\`
-${ann.originalCode}
-\`\`\`
-`;
-    }
-    if (ann.text) {
-      output += `> ${ann.text}
-`;
-    }
-    output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
-    if (ann.images && ann.images.length > 0) {
-      output += `**Attached images:**
-`;
-      ann.images.forEach((img) => {
-        output += `- [${img.name}] \`${img.path}\`
-`;
-      });
-    }
-    output += `
-`;
-  });
-  output += `---
-`;
-  return output;
-};
 // ../../../../../tmp/claude-1000/-home-iulian-Work-personal/4edee27b-a837-4b36-81ae-e04608bfbaf8/scratchpad/src/plannotator/packages/shared/pr-types.ts
 var PLATFORM_CAPABILITIES = {
   github: {
@@ -2685,28 +2553,6 @@ function getDisplayRepo(m) {
   if (m.platform === "bitbucket")
     return `${m.workspace}/${m.repo}`;
   return m.projectPath;
-}
-
-// ../../../../../tmp/claude-1000/-home-iulian-Work-personal/4edee27b-a837-4b36-81ae-e04608bfbaf8/scratchpad/src/plannotator/packages/review-editor/utils/artifactAnnotations.ts
-function formatArtifactTimestamp(seconds) {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor(total % 3600 / 60);
-  const secs = total % 60;
-  const two = (value) => String(value).padStart(2, "0");
-  return hours > 0 ? `${hours}:${two(minutes)}:${two(secs)}` : `${minutes}:${two(secs)}`;
-}
-function artifactAnchorLabel(anchor) {
-  switch (anchor.kind) {
-    case "document":
-      return anchor.originalText ? "Selected text" : "Document note";
-    case "image":
-      return `Pin at ${Math.round(anchor.x * 100)}%, ${Math.round(anchor.y * 100)}%`;
-    case "video":
-      return `Video at ${formatArtifactTimestamp(anchor.timestamp)}`;
-    case "page":
-      return "Whole artifact";
-  }
 }
 
 // ../../../../../tmp/claude-1000/-home-iulian-Work-personal/4edee27b-a837-4b36-81ae-e04608bfbaf8/scratchpad/src/plannotator/packages/review-editor/utils/exportFeedback.ts
@@ -3125,117 +2971,59 @@ ${diffContext ? `**Diff:** ${describeDiff(diffContext)}
   output += generalSection;
   return output;
 }
-function buildProseFeedback(descriptionAnnotations, commentAnnotations, descriptionBody) {
-  const parts = [];
-  const regularDescription = descriptionAnnotations.filter((annotation) => !annotation.artifact);
-  const regularComments = commentAnnotations.filter((annotation) => !annotation.artifact);
-  const artifactDescription = descriptionAnnotations.filter((annotation) => !!annotation.artifact);
-  const artifactComments = commentAnnotations.filter((annotation) => !!annotation.artifact);
-  if (regularDescription.length > 0 && descriptionBody) {
-    parts.push(exportAnnotations(parseMarkdownToBlocks(descriptionBody), regularDescription, [], "PR Description Feedback", "PR description"));
-  }
-  if (regularComments.length > 0) {
-    parts.push(exportCommentAnnotations(regularComments));
-  }
-  if (artifactDescription.length > 0 || artifactComments.length > 0) {
-    parts.push(exportArtifactAnnotations(artifactDescription, artifactComments));
-  }
-  return parts.join(`
 
-`);
+// vendor-src/entry.ts
+var todo = (name) => {
+  throw new Error(`${name}: not implemented yet`);
+};
+function docFeedback(_input) {
+  return todo("docFeedback");
 }
-function exportCommentAnnotations(annotations) {
-  if (annotations.length === 0)
-    return "";
-  let output = `# PR Comment Feedback
-
-`;
-  for (const ann of annotations) {
-    output += `## Comment by @${ann.commentAuthor}
-
-`;
-    if (ann.commentBody.trim()) {
-      const quoted = ann.commentBody.trim().split(`
-`).map((line) => `> ${line}`).join(`
-`);
-      output += `${quoted}
-
-`;
-    }
-    output += `${ann.text}
-
-`;
-  }
-  return output.trimEnd() + `
-`;
+function planApprove(_input) {
+  return todo("planApprove");
 }
-function quoteMarkdown(markdown) {
-  return markdown.trim().split(`
-`).map((line) => `> ${line}`).join(`
-`);
+function planDeny(_input) {
+  return todo("planDeny");
 }
-function safeHeading(value) {
-  return value.replace(/[\r\n]+/g, " ").trim() || "Artifact";
+function annotateSend(_input) {
+  return todo("annotateSend");
 }
-function artifactFeedbackEntry(meta, note, source) {
-  let output = `## ${safeHeading(meta.artifactName)} — ${artifactAnchorLabel(meta.anchor)}
-
-`;
-  output += `[Open artifact](<${meta.artifactUrl}>) · [View source](<${meta.sourceUrl}>)
-
-`;
-  if (source.kind === "comment") {
-    output += `In reply to the artifact source comment by @${source.author}:
-
-`;
-    if (source.body.trim())
-      output += `${quoteMarkdown(source.body)}
-
-`;
-  } else {
-    output += `Regarding an artifact in the PR description.
-
-`;
-  }
-  if (meta.anchor.kind === "document" && meta.anchor.originalText) {
-    output += `${quoteMarkdown(meta.anchor.originalText)}
-
-`;
-  }
-  output += `${note.trim()}
-`;
-  return output;
+function annotateApprove(_input) {
+  return todo("annotateApprove");
 }
-function exportArtifactAnnotations(descriptionAnnotations, commentAnnotations) {
-  if (descriptionAnnotations.length === 0 && commentAnnotations.length === 0)
-    return "";
-  let output = `# PR Artifact Feedback
-
-`;
-  for (const annotation of descriptionAnnotations) {
-    output += `${artifactFeedbackEntry(annotation.artifact, annotation.text ?? "", { kind: "description" })}
-`;
-  }
-  for (const annotation of commentAnnotations) {
-    output += `${artifactFeedbackEntry(annotation.artifact, annotation.text, {
-      kind: "comment",
-      author: annotation.commentAuthor,
-      body: annotation.commentBody
-    })}
-`;
-  }
-  return output.trimEnd() + `
-`;
+function annotateExit(_input) {
+  return todo("annotateExit");
+}
+function reviewFeedback(_input) {
+  return todo("reviewFeedback");
+}
+function reviewSend(_input) {
+  return todo("reviewSend");
+}
+function draftSave(_input) {
+  return todo("draftSave");
+}
+function draftRestore(_draft) {
+  return todo("draftRestore");
+}
+function parsePatch(_rawPatch) {
+  return todo("parsePatch");
 }
 export {
-  buildProseFeedback,
+  annotateApprove,
+  annotateExit,
+  annotateSend,
+  docFeedback,
+  draftRestore,
+  draftSave,
   exportAnnotations,
-  exportCodeFileAnnotations,
-  exportCommentAnnotations,
-  exportEditorAnnotations,
-  exportLinkedDocAnnotations,
   exportReviewFeedback,
   parseMarkdownToBlocks,
+  parsePatch,
+  planApprove,
+  planDeny,
   planDenyFeedback,
+  reviewFeedback,
+  reviewSend,
   wrapFeedbackForAgent
 };
