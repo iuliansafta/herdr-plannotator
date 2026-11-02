@@ -66,6 +66,7 @@ export default class Plannotator extends View {
         const session = await loadSession(this.api);
         this.session = session;
         this.view = session.native ? this.makeView(session) : null;
+        this.watchChanges(cx);
         this.view?.init(cx);
         await this.restoreDraft();
         this.state = { name: "ready" };
@@ -139,13 +140,25 @@ export default class Plannotator extends View {
     await this.sendDraft(P.draftSave(this.input()));
   }
 
-  changed(cx) {
+  // Views report changes from their own child cx, whose notify can't reach the
+  // header. Waking this root task redraws the root, and its timer owns the
+  // draft debounce.
+  changed(_childCx) {
     this.confirming = null;
-    this.draftTimer?.cancel?.();
-    this.draftTimer = cx.timer.after(DRAFT_DEBOUNCE_MS, (cx) => {
-      cx.spawn(async () => this.saveDraft());
+    this.wake?.();
+  }
+
+  watchChanges(cx) {
+    cx.spawn(async (cx) => {
+      for (;;) {
+        await new Promise((resolve) => (this.wake = resolve));
+        cx.notify();
+        this.draftTimer?.cancel?.();
+        this.draftTimer = cx.timer.after(DRAFT_DEBOUNCE_MS, (cx) => {
+          cx.spawn(async () => this.saveDraft());
+        });
+      }
     });
-    cx.notify();
   }
 
   decide(action, cx) {
