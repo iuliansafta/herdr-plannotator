@@ -1,6 +1,5 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, Popover, TextareaState, Textarea, VirtualListScrollHandle } from "gpui-base";
-import { show_fps_monitor } from "gpui-fps";
 import { theme, settings, props, exec } from "herdr";
 import { parsePatch } from "./patch.js";
 import { fileLines, rangeOf, lineComment, fileComment, generalComment, buildRows, scopeOf, lineLabel } from "./model.js";
@@ -224,9 +223,7 @@ export class ReviewView {
   async toggleViewed(path) {
     await this.progressLoad;
     const viewed = !this.viewed.has(path);
-    if (viewed) this.viewed.add(path);
-    else this.viewed.delete(path);
-    this.viewed = new Set(this.viewed);
+    this.viewed = new Set(viewed ? [...this.viewed, path] : [...this.viewed].filter((p) => p !== path));
     const p = this.progress;
     const fingerprint = p?.fingerprints?.[path];
     if (!p || !fingerprint) return;
@@ -252,7 +249,7 @@ export class ReviewView {
       if (res.json.superseded) return;
       Object.assign(s, res.json);
       this.load(s);
-      this.composer = null;
+      this.closeComposer();
       this.viewed = new Set();
       this.progress = null;
       this.progressLoad = this.loadProgress();
@@ -275,11 +272,6 @@ export class ReviewView {
   /** Dev: scrolls the diff to row `i`. */
   scrollTo(i) {
     this.scroll.scroll_to_item(i, "top");
-  }
-
-  /** Dev: the frame-time HUD. */
-  fps() {
-    show_fps_monitor({ anchor: "bottom_left" });
   }
 
   /** Dev: writes the annotations as JSON to `path`. */
