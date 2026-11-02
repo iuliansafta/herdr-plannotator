@@ -9,7 +9,7 @@ upstream=${1:-$here/.upstream/plannotator}
 ver=${2:-$(plannotator --version | awk '{print $NF}')}
 tag=v${ver#v}
 if [ ! -d "$upstream/.git" ]; then
-  git clone --quiet --depth 1 --branch "$tag" https://github.com/backnotprop/plannotator.git "$upstream"
+  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" https://github.com/backnotprop/plannotator.git "$upstream"
 fi
 git -C "$upstream" fetch --quiet --depth 1 origin tag "$tag"
 git -C "$upstream" checkout --quiet "$tag"
