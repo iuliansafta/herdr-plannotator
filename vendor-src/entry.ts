@@ -133,12 +133,10 @@ export function docFeedback(input: DocInput): string {
 const planRevisionField = (session: PlanSession) =>
   session.mode === undefined && typeof session.planRevision === "number" ? { planRevision: session.planRevision } : {};
 
-// packages/editor/App.tsx:4436 handleApprove
+// packages/editor/App.tsx:4434 handleApprove
 export function planApprove(input: DocInput): Decision {
   const { session } = input;
   const agentSwitch = effectiveAgent(session, "plan");
-  // The plain Approve offers notes only where the host delivers them; elsewhere
-  // approving with annotations is the browser's "Approve, discard" (bare).
   const withNotes = session.approvalNotesSupported === true && hasDocFeedback(input);
   return post("/api/approve", {
     draftGeneration: nextGeneration(input),
@@ -150,7 +148,7 @@ export function planApprove(input: DocInput): Decision {
   }, session);
 }
 
-// packages/editor/App.tsx:4550 handleDeny
+// packages/editor/App.tsx:4553 handleDeny
 export function planDeny(input: DocInput): Decision {
   return post("/api/deny", {
     draftGeneration: nextGeneration(input),
@@ -160,7 +158,7 @@ export function planDeny(input: DocInput): Decision {
   }, input.session);
 }
 
-// packages/editor/App.tsx:4615 handleAnnotateFeedback
+// packages/editor/App.tsx:4630 handleAnnotateFeedback
 export function annotateSend(input: DocInput): Decision {
   const feedback = docFeedback(input);
   return post("/api/feedback", {
@@ -172,7 +170,7 @@ export function annotateSend(input: DocInput): Decision {
   }, input.session);
 }
 
-// packages/editor/App.tsx:4730 handleAnnotateApprove (buildAnnotateApprovalBody)
+// packages/editor/App.tsx:4728 handleAnnotateApprove
 export function annotateApprove(input: DocInput): Decision {
   const draftGeneration = nextGeneration(input);
   if (input.session.approvalNotesSupported !== true) return post("/api/approve", { draftGeneration }, input.session);
@@ -244,12 +242,11 @@ export function reviewFeedback(input: ReviewInput): string {
   return exportReviewFeedback(input.annotations, session.prMetadata, feedbackDiffContext(session), prReviewScopeLabel(session));
 }
 
-// packages/review-editor/App.tsx:4272 handleSendFeedback and :4344 handleApprove
+// packages/review-editor/App.tsx:4272 handleSendFeedback, :4343 handleApprove
 export function reviewSend(input: ReviewInput & { approved: boolean }): Decision {
   const { session } = input;
   const draftGeneration = nextGeneration(input);
   if (input.approved) {
-    // As planApprove: notes ride the approval only where the host delivers them.
     const withAnnotations = session.approvalNotesSupported === true && input.annotations.length > 0;
     return post("/api/feedback", buildReviewApprovalBody({
       draftGeneration,
@@ -271,7 +268,7 @@ export function reviewSend(input: ReviewInput & { approved: boolean }): Decision
 const isReview = (input: DocInput | ReviewInput): input is ReviewInput => !("blocks" in input);
 
 /** The `/api/draft` request the web app sends after an annotation change. */
-// packages/ui/hooks/useAnnotationDraft.ts:421 persistNow and useCodeAnnotationDraft.ts:233 autosave
+// packages/ui/hooks/useAnnotationDraft.ts:421 persistNow, useCodeAnnotationDraft.ts:229 autosave
 export function draftSave(input: DocInput | ReviewInput): Decision {
   const draftGeneration = nextGeneration(input);
   const globalAttachments = isReview(input) ? [] : input.globalAttachments ?? [];
@@ -284,7 +281,6 @@ export function draftSave(input: DocInput | ReviewInput): Decision {
   return { method: "POST", path: "/api/draft", body, draftGeneration };
 }
 
-/** The `/api/draft` DELETE the annotate app sends after its feedback or approval lands. */
 // packages/ui/hooks/useAnnotationDraft.ts:555 dismissDraft
 export function draftDismiss(input: { draftGeneration?: number }): Decision {
   const draftGeneration = nextGeneration(input);
@@ -294,12 +290,8 @@ export function draftDismiss(input: { draftGeneration?: number }): Decision {
 const readGeneration = (value: unknown): number | null =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 
-/**
- * Reads any `/api/draft` answer: a saved draft (200), `{found: false,
- * draftGeneration}` (404), or a stale-save refusal (409). Adopts the server's
- * generation so later saves and decisions are not refused or left undeleted.
- */
-// packages/ui/hooks/useAnnotationDraft.ts:337 and useCodeAnnotationDraft.ts:182 draft load
+/** Reads any `/api/draft` answer (200 draft, 404 or 409 refusal) and adopts the server's generation. */
+// packages/ui/hooks/useAnnotationDraft.ts:336, useCodeAnnotationDraft.ts:182 load draft on mount
 export function draftRestore(draft: unknown, draftGeneration = 0): RestoredDraft {
   const data = (draft && typeof draft === "object" ? draft : {}) as Record<string, unknown>;
   const generation = readGeneration(data.draftGeneration);
