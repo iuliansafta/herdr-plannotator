@@ -13,8 +13,8 @@ So compatibility means **the wire, not the pixels**:
    (`/api/approve`, `/api/deny`, `/api/feedback`, `/api/exit`, `/api/draft`),
    with the same `serverSession` and `draftGeneration` fields.
 2. The agent receives byte-identical feedback markdown, because the export code
-   is Plannotator's own, vendored by `tools/build-vendor.sh` from a pinned tag
-   (`v0.28.35`, the installed CLI). We do not reimplement export.
+   is Plannotator's own, vendored by `tools/update-vendor.sh` from the tag of
+   the installed CLI (`PINNED_VERSION` in the bundle). We do not reimplement export.
 3. Every feature we don't draw natively is one click away: the header's
    **Open in browser** button opens the same session URL in the system browser
    (`cx.open_url`). The session stays the same, so nothing is lost.
@@ -29,7 +29,7 @@ mod/doc/                   plan + annotate document view (markdown blocks)
 mod/review/                code review view (diff)
 mod/vendor/plannotator.js  GENERATED. bun bundle of upstream export/parse code
 vendor-src/entry.ts        the bundle's entry: re-exports + payload builders
-tools/build-vendor.sh      clones upstream at the pin, bundles entry.ts
+tools/update-vendor.sh     checks out the installed CLI's tag, runs build-vendor.ts
 tests/                     parity tests (bun test): vendor output == upstream
 ```
 

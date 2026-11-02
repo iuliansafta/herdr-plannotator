@@ -1,6 +1,11 @@
 // The vendor bundle's surface. Upstream code is re-exported untouched; the
 // builders below reproduce what Plannotator's React app POSTs, so the server
 // and the agent cannot tell this client from the browser.
+
+declare const PLANNOTATOR_PINNED_VERSION: string;
+/** The plannotator release this bundle was built from (tools/build-vendor.ts). */
+export const PINNED_VERSION: string = PLANNOTATOR_PINNED_VERSION;
+
 export {
   parseMarkdownToBlocks,
   exportAnnotations,
