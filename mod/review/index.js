@@ -245,8 +245,10 @@ export class ReviewView {
         ...(s.base ? { base: s.base } : {}),
         hideWhitespace: !!s.hideWhitespace,
       });
-      if (!res.ok || res.json?.error) throw new Error(res.json?.error ?? `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(res.json?.error ?? `HTTP ${res.status}`);
       if (res.json.superseded) return;
+      // Like the web app, an `error` beside the patch is shown, not fatal.
+      this.toast = res.json.error ?? null;
       Object.assign(s, res.json);
       this.load(s);
       this.closeComposer();
@@ -457,7 +459,9 @@ export class ReviewView {
         .child(div().w(40).text_right().child(line.oldNo === null ? "" : String(line.oldNo)))
         .child(div().w(40).text_right().child(line.newNo === null ? "" : String(line.newNo))))
       .child(div().w(16).flex_none().text_center().text_color(tint ?? t.dim).child(sign))
-      .child(div().flex_1().whitespace_nowrap().pr(12).child((line.text.replace(/\t/g, "    ") || " ") + (line.noEol ? "  ⏎̸" : "")));
+      .child(div().whitespace_nowrap().child(line.text.replace(/\t/g, "    ") || " "))
+      .when(!!line.noEol, (el) => el.child(div().flex_none().ml(10).text_size(10.5).text_color(t.dim).child("no newline at end of file")))
+      .child(div().flex_1().pr(12));
   }
 
   // Inside the diff list a card cannot have handlers (on_item_click opens it);
