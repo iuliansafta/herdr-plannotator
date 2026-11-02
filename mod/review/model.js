@@ -36,6 +36,26 @@ const uuid = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID
 const withAuthor = (author) => (author ? { author } : {});
 
 /** App.tsx handleAddAnnotationForFile, for a plain comment (no suggestion, label or token). */
+// review-editor/hooks/useAnnotationFactory.ts withPRContext, without the
+// GitButler fields and the line anchors (captureAnchor) this view doesn't make.
+export function stamp(ann, session) {
+  const pr = session.prMetadata;
+  const sha = /^commit:([0-9a-f]{4,64})$/i.exec(session.diffType ?? "")?.[1];
+  const subject = sha && session.commitInfo?.sha === sha ? session.commitInfo.subject : undefined;
+  return {
+    ...ann,
+    ...(pr ? {
+      prUrl: pr.url,
+      prNumber: pr.platform === "gitlab" ? pr.iid : pr.number,
+      prTitle: pr.title,
+      prRepo: pr.platform === "github" ? `${pr.owner}/${pr.repo}` : pr.platform === "bitbucket" ? `${pr.workspace}/${pr.repo}` : pr.projectPath,
+      ...(session.prDiffScope ? { diffScope: session.prDiffScope } : {}),
+    } : {}),
+    ...(sha ? { commitSha: sha, ...(subject ? { commitSubject: subject } : {}) } : {}),
+    ...(session.localDraftTarget ? { localReviewTarget: session.localDraftTarget } : {}),
+  };
+}
+
 export function lineComment({ filePath, side, lineStart, lineEnd, text, author }) {
   return { id: shortId(), type: "comment", scope: "line", filePath, lineStart, lineEnd, side, text, createdAt: Date.now(), ...withAuthor(author) };
 }

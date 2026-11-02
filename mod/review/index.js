@@ -2,7 +2,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, Popover, TextareaState, Textarea, VirtualListScrollHandle } from "gpui-base";
 import { theme, settings, props, exec } from "herdr";
 import { parsePatch } from "./patch.js";
-import { fileLines, rangeOf, lineComment, fileComment, generalComment, buildRows, scopeOf, lineLabel } from "./model.js";
+import { fileLines, rangeOf, lineComment, fileComment, generalComment, stamp, buildRows, scopeOf, lineLabel } from "./model.js";
 
 const STATUS = { added: ["A", "ansi2"], deleted: ["D", "ansi1"], renamed: ["R", "ansi4"], modified: ["M", "ansi3"] };
 const REPLAY_DELAY_MS = 600;
@@ -184,9 +184,9 @@ export class ReviewView {
     if (c.editing) {
       this.annotations = this.annotations.map((a) => (a.id === c.editing ? { ...a, text: body } : a));
     } else {
-      const ann = c.scope === "line" ? lineComment({ ...c, text: body, author })
+      const ann = stamp(c.scope === "line" ? lineComment({ ...c, text: body, author })
         : c.scope === "file" ? fileComment({ filePath: c.filePath, text: body, author })
-        : generalComment({ text: body, author });
+        : generalComment({ text: body, author }), this.host.session);
       this.annotations = [...this.annotations, ann];
     }
     this.closeComposer();

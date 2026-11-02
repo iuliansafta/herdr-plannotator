@@ -1,9 +1,9 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, focused, run, theme } from "herdr";
-import { randomUUID } from "crypto";
 import * as P from "./vendor/plannotator.js";
 import { Api, loadSession } from "./api.js";
+import { DecisionControl } from "./decision.js";
 import { DocumentView } from "./doc/index.js";
 import { ReviewView } from "./review/index.js";
 
@@ -14,37 +14,19 @@ const LIVENESS_MS = 4000;
 const TITLES = { plan: "Plan review", annotate: "Annotate", review: "Code review", archive: "Plan archive" };
 const DONE_TEXT = {
   approved: "Approved. The agent has your decision.",
-  denied: "Feedback sent to the agent.",
   sent: "Feedback sent to the agent.",
+  done: "Done. Nothing to send.",
   exited: "Closed without feedback.",
   gone: "This Plannotator session has ended. Close this pane.",
 };
 
-// Each decision: which buttons a mode shows, and what pressing one does.
-// `approve` actions follow the browser: with notes present they become
-// "Approve with notes" when the host takes notes, else a confirmed discard.
-// `dismissDraft`: the annotate app deletes its draft after these succeed.
-const ACTIONS = {
-  plan: [
-    { id: "deny", label: "Send feedback", build: (i) => P.planDeny(i), done: "denied", needsNotes: true },
-    { id: "approve", label: "Approve", approve: true, build: (i) => P.planApprove(i), done: "approved", primary: true },
-  ],
-  annotate: [
-    { id: "exit", label: "Close", build: (i) => P.annotateExit(i), done: "exited" },
-    { id: "approve", label: "Approve", approve: true, build: (i) => P.annotateApprove(i), done: "approved", dismissDraft: true, when: (s) => !!s.gate },
-    { id: "send", label: "Send feedback", build: (i) => P.annotateSend(i), done: "sent", dismissDraft: true, primary: true },
-  ],
-  review: [
-    { id: "send", label: "Send feedback", build: (i) => P.reviewSend({ ...i, approved: false }), done: "sent", needsNotes: true },
-    { id: "approve", label: "Approve", approve: true, build: (i) => P.reviewSend({ ...i, approved: true }), done: "approved", primary: true },
-  ],
-  archive: [],
-};
-
-function approveLabel(notes, notesSupported, confirming) {
-  if (notes === 0) return "Approve";
-  if (notesSupported) return "Approve with notes";
-  return confirming ? `Discard ${notes} note${notes === 1 ? "" : "s"} and approve?` : "Approve, discard notes";
+/** What the server was told, from the decisive request itself. */
+function outcomeOf(request) {
+  const path = request.path.split("?")[0];
+  if (path === "/api/exit") return "exited";
+  if (path === "/api/approve" || request.body?.approved === true) return "approved";
+  if (request.body?.nothingToSend) return "done";
+  return "sent";
 }
 
 export default class Plannotator extends View {
@@ -53,8 +35,9 @@ export default class Plannotator extends View {
     this.toast = null;
     this.draftTimer = null;
     this.draftGeneration = 0;
-    this.clientId = randomUUID();
-    this.confirming = null;
+    this.clientId = P.newClientId();
+    this.decision = new DecisionControl();
+    this.confirmClose = false;
     const url = props()?.url;
     if (!url) {
       this.state = { name: "error", message: "No session URL. Open this pane through plannotator-herdr." };
@@ -105,11 +88,11 @@ export default class Plannotator extends View {
   input() {
     const base = {
       session: this.session.data,
-      annotations: this.view.annotations,
+      annotations: this.view?.annotations ?? [],
       draftGeneration: this.draftGeneration,
       clientId: this.clientId,
     };
-    return this.session.kind === "review" ? base : { ...base, blocks: this.view.blocks };
+    return this.session.kind === "review" ? base : { ...base, blocks: this.view?.blocks ?? [] };
   }
 
   // A 200 draft and a 404 or 409 refusal all carry the server's generation;
@@ -122,7 +105,7 @@ export default class Plannotator extends View {
 
   async restoreDraft() {
     if (!this.view) return;
-    const res = await this.api.get("/api/draft").catch(() => null);
+    const res = await this.api.decide(P.draftLoad(this.input())).catch(() => null);
     if (!res || (res.status !== 200 && res.status !== 404)) return;
     const draft = this.adoptDraft(res.json);
     if (res.ok && draft.annotations.length) this.view.restore(draft.annotations);
@@ -134,6 +117,7 @@ export default class Plannotator extends View {
   }
 
   async saveDraft() {
+    if (this.state.name !== "ready") return;
     const res = await this.sendDraft(P.draftSave(this.input()));
     if (res?.status !== 409 || res.json?.decided) return;
     this.adoptDraft(res.json);
@@ -144,7 +128,7 @@ export default class Plannotator extends View {
   // header. Waking this root task redraws the root, and its timer owns the
   // draft debounce.
   changed(_childCx) {
-    this.confirming = null;
+    this.confirmClose = false;
     this.wake?.();
   }
 
@@ -161,29 +145,26 @@ export default class Plannotator extends View {
     });
   }
 
-  decide(action, cx) {
+  /** Runs one decision: the first request decides; the rest are cleanup. */
+  submit(plan, cx) {
     if (this.state.name !== "ready") return;
-    const notes = this.view?.annotations.length ?? 0;
-    if (action.approve && notes > 0 && !this.session.data.approvalNotesSupported && this.confirming !== action.id) {
-      this.confirming = action.id;
-      cx.notify();
-      return;
-    }
-    this.confirming = null;
     // Clicking a mod pane focuses it, so this is our own pane.
     this.ownPane = focused()?.pane ?? null;
-    this.state = { name: "submitting", action: action.id };
+    this.state = { name: "submitting" };
     this.toast = null;
+    this.draftTimer?.cancel?.();
     cx.notify();
     cx.spawn(async (cx) => {
+      const [decisive, ...cleanup] = plan.requests;
       try {
-        const res = await this.api.decide(action.build(this.input()));
-        if (!res.ok) throw new Error(res.json?.error ?? res.json?.code ?? `HTTP ${res.status}`);
-        this.draftTimer?.cancel?.();
-        if (action.dismissDraft) await this.sendDraft(P.draftDismiss(this.input()));
-        this.state = { name: "done", outcome: action.done };
+        const res = await this.api.decide(decisive);
+        if (!res.ok) throw new Error(res.json?.error ?? res.json?.message ?? res.json?.code ?? `HTTP ${res.status}`);
+        for (const r of cleanup) await this.sendDraft(r);
+        this.state = { name: "done", outcome: outcomeOf(decisive) };
         cx.timer.after(CLOSE_AFTER_MS, () => this.closePane());
       } catch (e) {
+        // A note the composer added rides the request; keep it as an annotation.
+        if (plan.note && this.view) this.view.restore([...this.view.annotations, plan.note]);
         this.state = { name: "ready" };
         this.toast = `Could not send: ${e?.message ?? e}`;
       }
@@ -191,58 +172,74 @@ export default class Plannotator extends View {
     });
   }
 
+  decide(id, note, cx) {
+    const plan = P.decisionRequest(id, this.input(), note);
+    if (!plan) {
+      this.toast = "Write a note first.";
+      cx.notify();
+      return;
+    }
+    this.submit(plan, cx);
+  }
+
+  exit(cx) {
+    if (this.input().annotations.length > 0 && !this.confirmClose) {
+      this.confirmClose = true;
+      cx.notify();
+      return;
+    }
+    this.confirmClose = false;
+    const request = this.session.kind === "review" ? P.reviewExit(this.input()) : P.annotateExit(this.input());
+    this.submit({ requests: [request] }, cx);
+  }
+
   closePane() {
     if (this.ownPane) run("pane.close", { pane: this.ownPane });
   }
 
-  openInBrowser(cx) {
-    cx.open_url(this.api.url("/"));
+  button(t, id, label, onClick, { disabled = false, danger = false } = {}) {
+    return div().id(id).h(28).px(12).flex().items_center().rounded(6).text_size(12.5)
+      .border_1().border_color(danger ? t.blocked : t.border).bg(t.surface)
+      .text_color(danger ? t.blocked : t.foreground)
+      .when(disabled, (el) => el.opacity(0.5))
+      .when(!disabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => onClick(cx)))
+      .child(label);
   }
 
-  button(t, id, label, onClick, { primary = false, disabled = false } = {}) {
-    return div()
-      .id(id)
-      .px(12)
-      .py(5)
-      .rounded(6)
-      .text_size(12.5)
-      .border(1)
-      .border_color(primary ? t.solid : t.border)
-      .bg(primary ? t.solid : t.surface)
-      .text_color(primary ? t.solid_foreground : t.foreground)
-      .when(disabled, (el) => el.opacity(0.5))
-      .when(!disabled, (el) => el.cursor_pointer().hover((s) => s.bg(primary ? t.accent : t.hover)).on_click((_e, cx) => onClick(cx)))
-      .child(label);
+  versionNote(t) {
+    const running = props()?.version;
+    if (!running || running === P.PINNED_VERSION) return null;
+    return div().px(8).py(2).rounded(10).bg(t.surface).border_1().border_color(t.border).text_size(11).text_color(t.dim)
+      .child(`Plannotator ${running} · pane built for ${P.PINNED_VERSION}`);
   }
 
   header(t) {
     const kind = this.session?.kind;
     const data = this.session?.data ?? {};
     const subtitle = data.filePath ?? data.gitRef ?? data.origin ?? "";
+    const live = this.state.name === "ready" || this.state.name === "submitting";
     const busy = this.state.name !== "ready";
-    const done = this.state.name === "done";
-    const notes = this.view?.annotations.length ?? 0;
-    const actions = done || !this.view ? [] : (ACTIONS[kind] ?? []).filter((a) => !a.when || a.when(data));
-    const label = (a) =>
-      this.state.action === a.id ? "Sending…"
-        : a.approve ? approveLabel(notes, data.approvalNotesSupported === true, this.confirming === a.id)
-          : a.label;
-    return h_flex()
-      .flex_none()
-      .h(44)
-      .px(14)
-      .gap(10)
-      .items_center()
-      .bg(t.chrome)
-      .border_b(1)
-      .border_color(t.border)
+    const decides = live && !!this.view && kind !== "archive";
+    const count = this.view?.annotations.length ?? 0;
+    const version = this.versionNote(t);
+    let control = null;
+    if (decides) {
+      const spec = P.buildDecisionSpec(P.decisionSpecInput(kind, this.input()));
+      control = this.decision.render(t, spec, {
+        busy,
+        count,
+        label: this.state.name === "submitting" ? "Sending…" : undefined,
+        onDecide: (id, note, cx) => this.decide(id, note, cx),
+      });
+    }
+    return h_flex().flex_none().h(44).px(14).gap(10).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child(TITLES[kind] ?? "Plannotator"))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(String(subtitle)))
-      .when(!!this.api && !done, (el) => el.child(this.button(t, "open-browser", "Open in browser", (cx) => this.openInBrowser(cx))))
-      .children(actions.map((a) => this.button(t, `act-${a.id}`, label(a), (cx) => this.decide(a, cx), {
-        primary: a.primary,
-        disabled: busy || (a.needsNotes && notes === 0),
-      })));
+      .when(!!version, (el) => el.child(version))
+      .when(!!this.api && live, (el) => el.child(this.button(t, "open-browser", "Open in browser", (cx) => cx.open_url(this.api.url("/")))))
+      .when(decides && kind !== "plan", (el) => el.child(this.button(t, "close-session",
+        this.confirmClose ? `Close without sending ${count}?` : "Close", (cx) => this.exit(cx), { disabled: busy, danger: this.confirmClose })))
+      .when(!!control, (el) => el.child(control));
   }
 
   centered(t, text, color) {
@@ -258,21 +255,16 @@ export default class Plannotator extends View {
       case "done":
         return this.centered(t, DONE_TEXT[this.state.outcome], t.foreground);
       default:
-        if (!this.view) return this.centered(t, "This session type is not drawn natively yet. Use Open in browser.");
+        if (!this.view) return this.centered(t, "This session type is not drawn natively. Use Open in browser.");
         return this.view.render(cx);
     }
   }
 
   render(cx) {
     const t = theme();
-    return v_flex()
-      .id("plannotator-root")
-      .size_full()
-      .bg(t.background)
-      .text_color(t.foreground)
+    return v_flex().id("plannotator-root").size_full().bg(t.background).text_color(t.foreground)
       .child(this.header(t))
-      .when(!!this.toast, (el) =>
-        el.child(div().px(14).py(6).bg(t.surface).text_size(12).text_color(t.blocked).child(this.toast)))
+      .when(!!this.toast, (el) => el.child(div().px(14).py(6).bg(t.surface).text_size(12).text_color(t.blocked).child(this.toast)))
       .child(v_flex().flex_1().min_h(0).child(this.body(t, cx)));
   }
 }

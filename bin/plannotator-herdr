@@ -27,7 +27,8 @@ command -v herdr-app >/dev/null 2>&1 || fallback "herdr-app not found"
 command -v jq >/dev/null 2>&1 || fallback "jq not found"
 herdr-app status >/dev/null 2>&1 || fallback "no herdr window"
 
-props=$(jq -cn --arg url "$url" '{url: $url}')
+version=$(plannotator --version 2>/dev/null | awk '{print $2}')
+props=$(jq -cn --arg url "$url" --arg version "$version" '{url: $url} + (if $version == "" then {} else {version: $version} end)')
 place=${PLANNOTATOR_HERDR_PLACE:-right}
 
 # The pane of the terminal that started plannotator (the agent's), when it is
