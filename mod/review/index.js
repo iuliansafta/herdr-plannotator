@@ -29,9 +29,9 @@ export class ReviewView {
 
   init(cx) {
     this.focus = cx.focus_handle();
+    this.focus.focus();
     this.scroll = VirtualListScrollHandle.new();
     this.text = TextareaState.new({ placeholder: "Leave a comment…", rows: 3 });
-    this.text.on("submit", (e, cx) => { if (e.secondary) this.act(cx, "save"); });
     this.text.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.text.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.load(this.host.session);
@@ -109,7 +109,7 @@ export class ReviewView {
 
   // on_size_change reports only on the root, so the diff column's width is derived.
   diffWidth() {
-    return (this.width ?? NARROW) - this.filesWidth() - (this.notesShown() ? NOTES_W : 0);
+    return (this.width ?? 900) - this.filesWidth() - (this.notesShown() ? NOTES_W : 0);
   }
 
   filesWidth() {
@@ -307,7 +307,7 @@ export class ReviewView {
   }
 
   narrow() {
-    return (this.width ?? NARROW) < NARROW;
+    return (this.width ?? 0) < NARROW;
   }
 
   notesShown() {
@@ -316,7 +316,9 @@ export class ReviewView {
 
   key(e, cx) {
     if (this.typing) {
+      const m = e.modifiers ?? {};
       if (e.key === "escape") { this.act(cx, "cancel"); cx.stop_propagation(); }
+      else if (e.key === "enter" && (m.control || m.platform)) { this.act(cx, "save"); cx.stop_propagation(); }
       return;
     }
     const k = { j: "next", k: "prev", escape: "cancel" }[e.key];
@@ -407,8 +409,8 @@ export class ReviewView {
     const header = h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.surface)
       .child(div().text_size(11).font_semibold().text_color(t[color]).child(letter))
       .child(div().flex_1().min_w(40).truncate().text_size(12.5).font_semibold().child(file.oldPath ? `${file.oldPath} → ${file.path}` : file.path))
-      .child(div().flex_none().text_size(11.5).text_color(t.ansi2).child(`+${file.additions}`))
-      .child(div().flex_none().text_size(11.5).text_color(t.ansi1).child(`−${file.deletions}`))
+      .when(file.additions > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.ansi2).child(`+${file.additions}`)))
+      .when(file.deletions > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.ansi1).child(`−${file.deletions}`)))
       .child(h_flex().id("rv-viewed-head").gap(6).items_center().cursor_pointer().text_size(12).text_color(t.muted)
         .on_click((_e, cx) => this.act(cx, "toggleViewed", file.path))
         .child(this.checkbox(t, "rv-viewed-box", this.viewed.has(file.path), (cx) => this.act(cx, "toggleViewed", file.path)))
