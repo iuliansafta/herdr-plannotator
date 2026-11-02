@@ -1,4 +1,4 @@
-import { div } from "gpui-kit";
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import { theme, settings, props, exec } from "herdr";
 import * as P from "../vendor/plannotator.js";
@@ -13,6 +13,14 @@ const KIND = {
   GLOBAL_COMMENT: { label: "General", color: (t) => t.muted },
 };
 const ALERT = { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution" };
+
+/** A token's runs with its trailing space folded into the last run when styles agree. */
+function shownSegs(tok) {
+  if (!tok.space) return tok.segs;
+  const last = tok.segs[tok.segs.length - 1];
+  const same = ["bold", "italic", "code", "strike", "link"].every((k) => last[k] === tok.space[k]);
+  return same ? [...tok.segs.slice(0, -1), { ...last, text: last.text + " " }] : [...tok.segs, { ...tok.space, text: " " }];
+}
 
 function alpha(color, a) {
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color ?? "");
@@ -30,6 +38,38 @@ function alpha(color, a) {
  * anchor/focus are token indexes into doc.tokens.
  */
 const IDLE = { name: "idle" };
+
+const span = (sel) => (sel.name === "idle" ? null : [Math.min(sel.anchor, sel.focus), Math.max(sel.anchor, sel.focus)]);
+
+/** Tokens whose selection paint differs between two spans, as ranges. */
+function spanDiff(a, b) {
+  if (!a || !b) return [a ?? b].filter(Boolean);
+  const out = [];
+  if (a[0] !== b[0]) out.push([Math.min(a[0], b[0]), Math.max(a[0], b[0])]);
+  if (a[1] !== b[1]) out.push([Math.min(a[1], b[1]), Math.max(a[1], b[1])]);
+  return out;
+}
+
+// Retained views: a block rebuilds only when it is notified, so dragging a
+// selection rebuilds the one or two blocks whose paint changed, not the document.
+class BlockView extends View {
+  init(p) {
+    this.owner = p.owner;
+    this.b = p.b;
+  }
+  render() {
+    return this.owner.block(theme(), this.owner.doc.units[this.b]);
+  }
+}
+
+class BodyView extends View {
+  init(p) {
+    this.owner = p.owner;
+  }
+  render() {
+    return this.owner.body(theme());
+  }
+}
 
 export class DocumentView {
   constructor(host) {
@@ -56,12 +96,40 @@ export class DocumentView {
     this.editInput = TextareaState.new();
     this.editInput.set_auto_grow(2, 10);
     this.focus = cx.focus_handle();
+    this.relocate();
     this.replay(cx);
+    this.blockViews = this.doc.units.map((_u, b) => cx.new(BlockView, { owner: this, b }));
+    this.bodyView = cx.new(BodyView, { owner: this });
   }
 
   restore(annotations) {
     this.annotations = annotations;
     this.relocate();
+  }
+
+  /** Rebuild the blocks holding these token ranges, and the body (panel, composer) when asked. */
+  redraw(cx, ranges, body = true) {
+    if (!cx || !this.bodyView) return;
+    const seen = new Set();
+    for (const [lo, hi] of ranges) {
+      for (let b = this.doc.tokens[lo].b; b <= this.doc.tokens[hi].b; b++) {
+        if (seen.has(b)) continue;
+        seen.add(b);
+        cx.notify(this.blockViews[b]);
+      }
+    }
+    if (body) cx.notify(this.bodyView);
+  }
+
+  setSel(next, cx) {
+    const prev = this.sel;
+    this.sel = next;
+    this.redraw(cx, spanDiff(span(prev), span(next)), prev.name !== next.name || next.name === "selected" || next.name === "composing");
+  }
+
+  focusRange(id) {
+    const r = id && this.ranges.get(id);
+    return r ? [r] : [];
   }
 
   // --- named actions (mouse handlers and the dev script call only these) ---
@@ -73,44 +141,40 @@ export class DocumentView {
   press(r, cx) {
     const k = this.ref(r);
     if (k === undefined) return;
-    this.sel = { name: "pressed", anchor: k, focus: k, moved: false };
+    const unfocus = this.focusRange(this.focusedId);
     this.focusedId = null;
-    cx?.notify();
+    this.redraw(cx, unfocus, false);
+    this.setSel({ name: "pressed", anchor: k, focus: k, moved: false }, cx);
   }
 
   selectWord(r, cx) {
     const k = this.ref(r);
     if (k === undefined) return;
-    this.sel = { name: "pressed", anchor: k, focus: k, moved: true };
-    cx?.notify();
+    this.setSel({ name: "pressed", anchor: k, focus: k, moved: true }, cx);
   }
 
   extend(r, cx) {
     const k = this.ref(r);
     if (this.sel.name !== "pressed" || k === undefined || k === this.sel.focus) return;
-    this.sel = { ...this.sel, focus: k, moved: true };
-    cx?.notify();
+    this.setSel({ ...this.sel, focus: k, moved: true }, cx);
   }
 
   release(at, cx) {
     if (this.sel.name !== "pressed") return;
     const { anchor, focus, moved } = this.sel;
-    this.sel = moved ? { name: "selected", anchor, focus, at: at ?? { x: 80, y: 120 } } : IDLE;
-    cx?.notify();
+    this.setSel(moved ? { name: "selected", anchor, focus, at: at ?? { x: 80, y: 120 } } : IDLE, cx);
   }
 
   cancel(cx) {
-    this.sel = IDLE;
     this.editingId = null;
-    cx?.notify();
+    this.setSel(IDLE, cx);
   }
 
   openComposer(cx) {
     if (this.sel.name !== "selected") return;
-    this.sel = { ...this.sel, name: "composing" };
     this.composer.set_value("");
+    this.setSel({ ...this.sel, name: "composing" }, cx);
     this.composer.focus();
-    cx?.notify();
   }
 
   addComment(text, cx) {
@@ -127,10 +191,11 @@ export class DocumentView {
   add(type, text, cx) {
     const { anchor, focus } = this.sel;
     const fields = rangeFields(this.doc, anchor, focus);
-    this.sel = IDLE;
-    if (!fields.originalText.trim()) return cx?.notify();
-    this.annotations = [...this.annotations, { id: newId(), ...fields, type, text, createdA: Date.now(), images: [] }];
-    this.changed(cx);
+    this.setSel(IDLE, cx);
+    if (!fields.originalText.trim()) return;
+    const id = newId();
+    this.annotations = [...this.annotations, { id, ...fields, type, text, createdA: Date.now(), images: [] }];
+    this.changed(cx, [id]);
   }
 
   addGlobal(text, cx) {
@@ -141,7 +206,7 @@ export class DocumentView {
       ...this.annotations,
       { id: newId("global"), blockId: "", startOffset: 0, endOffset: 0, type: "GLOBAL_COMMENT", text: body, originalText: "", createdA: Date.now(), images: [] },
     ];
-    this.changed(cx);
+    this.changed(cx, []);
   }
 
   startEdit(id, cx) {
@@ -149,43 +214,50 @@ export class DocumentView {
     if (!ann) return;
     this.editingId = id;
     this.editInput.set_value(ann.text ?? "");
+    this.redraw(cx, []);
     this.editInput.focus();
-    cx?.notify();
   }
 
   editAnnotation(id, text, cx) {
     const body = String(text ?? this.editInput.value()).trim();
     this.editingId = null;
-    if (!body) return cx?.notify();
+    if (!body) return this.redraw(cx, []);
     this.annotations = this.annotations.map((a) => (a.id === id ? { ...a, text: body } : a));
-    this.changed(cx);
+    this.changed(cx, []);
   }
 
   removeAnnotation(id, cx) {
+    const gone = this.focusRange(id);
     this.annotations = this.annotations.filter((a) => a.id !== id);
     if (this.focusedId === id) this.focusedId = null;
     if (this.editingId === id) this.editingId = null;
-    this.changed(cx);
+    this.changed(cx, [], gone);
   }
 
   focusAnnotation(id, cx) {
+    const before = this.focusRange(this.focusedId);
     this.focusedId = this.focusedId === id ? null : id;
-    cx?.notify();
+    this.redraw(cx, [...before, ...this.focusRange(this.focusedId)]);
   }
 
-  changed(cx) {
+  /** After the annotation list changed: re-anchor, repaint `ids` (and `ranges`), tell main.js. */
+  changed(cx, ids, ranges = []) {
     this.relocate();
+    this.redraw(cx, [...ranges, ...ids.flatMap((id) => this.focusRange(id))]);
     if (cx) this.host.changed(cx);
   }
 
   /** Token range of every anchored annotation, recomputed when they change. */
   relocate() {
     this.ranges = new Map();
+    this.annAt = new Array(this.doc.tokens.length);
     for (const a of this.annotations) {
       if (a.type === "GLOBAL_COMMENT") continue;
       const at = locate(this.doc, a);
       const toks = at && tokensIn(this.doc, at[0], at[1]);
-      if (toks) this.ranges.set(a.id, toks);
+      if (!toks) continue;
+      this.ranges.set(a.id, toks);
+      for (let k = toks[0]; k <= toks[1]; k++) (this.annAt[k] ??= []).push(a);
     }
   }
 
@@ -202,29 +274,18 @@ export class DocumentView {
 
   // --- rendering ---
 
-  /** Per token: what paints it (selection, annotation). */
-  marks() {
-    const sel = this.sel.name === "idle" ? null : [Math.min(this.sel.anchor, this.sel.focus), Math.max(this.sel.anchor, this.sel.focus)];
-    const ann = new Array(this.doc.tokens.length);
-    for (const a of this.annotations) {
-      const r = this.ranges.get(a.id);
-      if (!r) continue;
-      for (let k = r[0]; k <= r[1]; k++) if (!ann[k] || a.id === this.focusedId) ann[k] = a;
-    }
-    return { sel, ann };
-  }
-
-  token(t, tok, m, extra) {
+  token(t, tok, sel, extra) {
     const k = tok.k;
-    const inSel = m.sel && k >= m.sel[0] && k <= m.sel[1];
-    const a = m.ann[k];
+    const inSel = sel && k >= sel[0] && k <= sel[1];
+    const anns = this.annAt[k];
+    const a = anns && (anns.find((x) => x.id === this.focusedId) ?? anns[0]);
     const focused = a && a.id === this.focusedId;
-    const segs = tok.space ? [...tok.segs.slice(0, -1), { ...tok.segs[tok.segs.length - 1], text: tok.segs[tok.segs.length - 1].text + " " }] : tok.segs;
+    const deleted = a?.type === "DELETION";
+    const segs = (tok.show ??= shownSegs(tok));
     const ref = { blockId: this.doc.units[tok.b].block.id, i: tok.i };
-    let el = h_flex()
+    let el = (segs.length === 1 ? this.seg(t, segs[0], deleted, div()) : h_flex())
       .id(`doc-t${k}`)
       .flex_none()
-      .cursor_text()
       .on_mouse_down("left", (e, cx) => {
         cx.stop_propagation();
         if (e.click_count >= 2) this.selectWord(ref, cx);
@@ -235,34 +296,37 @@ export class DocumentView {
     if (a?.type === "DELETION") el = el.bg(alpha(t.blocked, focused ? 0.35 : 0.14)).line_through().text_color(t.blocked);
     if (inSel) el = el.bg(t.selection);
     if (extra) el = extra(el);
-    return el.children(segs.map((s) => this.seg(t, s, a?.type === "DELETION")));
+    return segs.length === 1 ? el : el.children(segs.map((s) => this.seg(t, s, deleted, div())));
   }
 
-  seg(t, s, deleted) {
-    let el = div().child(s.text);
-    if (s.bold) el = el.font_bold().text_color(t.foreground);
+  seg(t, s, deleted, el) {
+    el = el.child(s.text);
+    if (s.bold) el = el.font_bold();
+    if (s.bold && !deleted) el = el.text_color(t.foreground);
     if (s.italic) el = el.italic();
     if (s.strike || deleted) el = el.line_through();
-    if (s.code) el = el.font_family(this.mono).text_size(13).px(3).rounded(4).bg(alpha(t.foreground, 0.07));
-    if (s.link) el = el.text_color(t.accent).underline();
+    if (s.code) el = el.font_family(this.mono).text_size(13).bg(alpha(t.foreground, 0.08));
+    if (s.link && !deleted) el = el.text_color(t.accent).underline();
     return el;
   }
 
-  words(t, m, tokens, size = 15) {
+  words(t, tokens, size = 15) {
+    const sel = span(this.sel);
     return h_flex()
       .flex_wrap()
       .items_baseline()
+      .cursor_text()
       .text_size(size)
       .line_height(1.65)
-      .children(tokens.map((tok) => this.token(t, tok, m)));
+      .children(tokens.map((tok) => this.token(t, tok, sel)));
   }
 
-  block(t, m, u) {
+  block(t, u) {
     const b = u.block;
     switch (b.type) {
       case "heading": {
         const [size, mt, mb] = HEADING[b.level] ?? HEADING[6];
-        return div().mt(mt).mb(mb).font_weight(b.level === 1 ? 700 : 600).text_color(b.level >= 3 ? alpha(t.foreground, 0.85) : t.foreground).child(this.words(t, m, u.tokens, size));
+        return div().mt(mt).mb(mb).font_weight(b.level === 1 ? 700 : 600).text_color(b.level >= 3 ? alpha(t.foreground, 0.85) : t.foreground).child(this.words(t, u.tokens, size));
       }
       case "list-item": {
         const checked = b.checked;
@@ -277,7 +341,7 @@ export class DocumentView {
           .my(3)
           .ml((b.level || 0) * 22)
           .child(div().flex_none().min_w(18).text_size(15).line_height(1.65).child(marker))
-          .child(div().flex_1().min_w(0).when(checked === true, (e) => e.text_color(t.muted)).child(this.words(t, m, u.tokens)));
+          .child(div().flex_1().min_w(0).text_color(checked === true ? t.muted : alpha(t.foreground, 0.8)).child(this.words(t, u.tokens)));
       }
       case "blockquote": {
         const title = b.alertKind && (ALERT[b.alertKind] ?? b.alertKind);
@@ -290,22 +354,23 @@ export class DocumentView {
           .border_color(color)
           .text_color(t.muted)
           .when(!!title, (e) => e.child(div().text_size(13).font_semibold().text_color(color).child(title)))
-          .child(this.words(t, m, u.tokens));
+          .child(this.words(t, u.tokens));
       }
       case "code":
       case "html":
       case "math":
-        return this.code(t, m, u);
+        return this.code(t, u);
       case "table":
-        return this.table(t, m, u);
+        return this.table(t, u);
       case "hr":
         return div().my(20).h(1).bg(t.border);
       default:
-        return div().mb(12).text_color(alpha(t.foreground, 0.8)).child(this.words(t, m, u.tokens));
+        return div().mb(12).text_color(alpha(t.foreground, 0.8)).child(this.words(t, u.tokens));
     }
   }
 
-  code(t, m, u) {
+  code(t, u) {
+    const sel = span(this.sel);
     const byRow = new Map(u.tokens.map((tok) => [tok.row, tok]));
     const lineH = 20;
     return v_flex()
@@ -330,13 +395,13 @@ export class DocumentView {
               const tok = byRow.get(n);
               if (!tok) return div().h(lineH);
               const shown = { ...tok, segs: [{ text: line.replace(/\t/g, "    ") }] };
-              return this.token(t, shown, m, (el) => el.h(lineH).items_center().min_w_full());
+              return this.token(t, shown, sel, (el) => el.h(lineH).items_center().min_w_full());
             }),
           ),
       );
   }
 
-  table(t, m, u) {
+  table(t, u) {
     return v_flex()
       .my(10)
       .rounded(6)
@@ -356,7 +421,7 @@ export class DocumentView {
                   .px(12)
                   .py(6)
                   .when(c > 0, (e) => e.border_l(1).border_color(t.border))
-                  .child(this.words(t, m, cell, 14)),
+                  .child(this.words(t, cell, 14)),
               ),
             ),
         ),
@@ -599,8 +664,10 @@ export class DocumentView {
   }
 
   render(_cx) {
-    const t = theme();
-    const m = this.marks();
+    return this.bodyView;
+  }
+
+  body(t) {
     const open = this.sel.name === "selected" || this.sel.name === "composing";
     return h_flex()
       .id("doc-root")
@@ -632,11 +699,12 @@ export class DocumentView {
             v_flex()
               .w_full()
               .max_w(860)
+              .mx_auto()
               .px(40)
               .py(28)
               .text_color(t.foreground)
               .when(!!this.front, (e) => e.child(this.frontCard(t)))
-              .children(this.doc.units.map((u) => this.block(t, m, u))),
+              .children(this.blockViews),
           ),
       )
       .child(this.panel(t))
