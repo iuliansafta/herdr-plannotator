@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const upstream = resolve(process.argv[2] ?? "");
-const outfile = resolve(process.argv[3] ?? "mod/vendor/plannotator.js");
+const outfile = resolve(process.argv[3] ?? "mods/plannotator/vendor/plannotator.js");
 if (!existsSync(join(upstream, "packages/core"))) throw new Error(`not a plannotator checkout: ${upstream}`);
 
 const git = (...args: string[]) => {

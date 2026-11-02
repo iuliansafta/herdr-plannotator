@@ -23,12 +23,13 @@ So compatibility means **the wire, not the pixels**:
 
 ```
 bin/plannotator-herdr      launcher + wrapper (one script, two modes)
-mod/main.js                View: loads the session, picks the mode view
-mod/api.js                 HTTP client for one Plannotator session
-mod/decision.js            Plannotator's DecisionControl, drawn from upstream's DecisionSpec
-mod/doc/                   plan + annotate document view (markdown blocks)
-mod/review/                code review view (diff)
-mod/vendor/plannotator.js  GENERATED. bun bundle of upstream export/parse code
+mods/plannotator/          the herdr mod (installed as mods/plannotator)
+  main.js                  View: loads the session, picks the mode view
+  api.js                   HTTP client for one Plannotator session
+  decision.js              Plannotator's DecisionControl, drawn from upstream's DecisionSpec
+  doc/                     plan + annotate document view (markdown blocks)
+  review/                  code review view (diff)
+  vendor/plannotator.js    GENERATED. bun bundle of upstream export/parse code
 vendor-src/entry.ts        the bundle's entry: re-exports + payload builders
 tools/update-vendor.sh     checks out the installed CLI's tag, runs build-vendor.ts
 tests/                     builder tests, CLI e2e (e2e.ts), pane e2e (pane-e2e.sh)
@@ -122,7 +123,7 @@ missing: the header shows **Open in browser** in every mode.
 
 ## Testing
 
-- `herdr-app check mod` after every change (it sandboxes `fetch`, so it only
+- `herdr-app check mods/plannotator` after every change (it sandboxes `fetch`, so it only
   proves load + first render).
 - A second herdr screen on a hidden workspace (`HERDR_APP_HOME=/run/user/1000/hpt`)
   shares the core but not focus, so tests can select tabs and `herdr-app shot`
@@ -139,7 +140,7 @@ missing: the header shows **Open in browser** in every mode.
 its body and its annotations, nothing else. It never builds a request body.
 
 ```js
-export class DocumentView {          // mod/doc/index.js   (plan + annotate)
+export class DocumentView {          // mods/plannotator/doc/index.js (plan + annotate)
   constructor(host)                  // host: { session, mode, api, changed(cx) }
   init(cx)                           // once, after the session loaded
   render(cx)                         // the body element (fills the space under the header)
@@ -147,7 +148,7 @@ export class DocumentView {          // mod/doc/index.js   (plan + annotate)
   annotations                        // upstream Annotation[], GLOBAL_COMMENT included
   blocks                             // the parseMarkdownToBlocks output it renders
 }
-export class ReviewView {            // mod/review/index.js
+export class ReviewView {            // mods/plannotator/review/index.js
   constructor(host) init(cx) render(cx) restore(annotations)
   annotations                        // upstream CodeAnnotation[]
 }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Re-pins mod/vendor/plannotator.js to the installed plannotator CLI's release.
+# Re-pins mods/plannotator/vendor/plannotator.js to the installed plannotator CLI's release.
 # Usage: tools/update-vendor.sh [upstream-checkout] [version]
 # The checkout defaults to .upstream/plannotator (cloned shallow on first use);
 # the version defaults to `plannotator --version`.
@@ -13,4 +13,4 @@ if [ ! -d "$upstream/.git" ]; then
 fi
 git -C "$upstream" fetch --quiet --depth 1 origin tag "$tag"
 git -C "$upstream" checkout --quiet "$tag"
-bun "$here/tools/build-vendor.ts" "$upstream" "$here/mod/vendor/plannotator.js"
+bun "$here/tools/build-vendor.ts" "$upstream" "$here/mods/plannotator/vendor/plannotator.js"

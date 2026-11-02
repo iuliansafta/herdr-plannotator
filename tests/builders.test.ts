@@ -1,7 +1,7 @@
 // Each expected body is written in the key order the React app serializes,
 // and compared through JSON.stringify so the order is part of the assertion.
 import { describe, expect, test } from "bun:test";
-import * as P from "../mod/vendor/plannotator.js";
+import * as P from "../mods/plannotator/vendor/plannotator.js";
 
 const sameWire = (actual: unknown, expected: unknown) => expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
 

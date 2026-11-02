@@ -4,7 +4,7 @@
 # window. Usage: test-screen.sh start|stop|status
 set -eu
 HOME_DIR=/run/user/$(id -u)/${HPT:-hpt}
-MOD_DIR=$(cd "$(dirname "$0")/../mod" && pwd)
+MOD_DIR=$(cd "$(dirname "$0")/../mods/plannotator" && pwd)
 find_pid() { pgrep -x herdr-app | while read -r p; do tr '\0' '\n' </proc/$p/environ | grep -qx "HERDR_APP_HOME=$HOME_DIR" && echo "$p"; done | head -1; }
 case "${1:-status}" in
 start)

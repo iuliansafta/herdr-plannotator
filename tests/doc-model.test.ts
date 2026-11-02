@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import * as P from "../mod/vendor/plannotator.js";
-import * as M from "../mod/doc/model.js";
+import * as P from "../mods/plannotator/vendor/plannotator.js";
+import * as M from "../mods/plannotator/doc/model.js";
 
 const md = await Bun.file(import.meta.dir + "/fixtures/plan.md").text();
 const blocks = P.parseMarkdownToBlocks(md);

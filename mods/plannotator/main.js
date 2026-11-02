@@ -1,6 +1,6 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, focused, run, theme } from "herdr";
+import { props, focused, run, theme, home } from "herdr";
 import * as P from "./vendor/plannotator.js";
 import { Api, loadSession } from "./api.js";
 import { DecisionControl } from "./decision.js";
@@ -19,6 +19,11 @@ const DONE_TEXT = {
   exited: "Closed without feedback.",
   gone: "This Plannotator session has ended. Close this pane.",
 };
+
+function tildePath(path) {
+  const h = home();
+  return h && path.startsWith(h + "/") ? "~" + path.slice(h.length) : path;
+}
 
 /** What the server was told, from the decisive request itself. */
 function outcomeOf(request) {
@@ -225,7 +230,7 @@ export default class Plannotator extends View {
   header(t) {
     const kind = this.session?.kind;
     const data = this.session?.data ?? {};
-    const subtitle = data.filePath ?? data.gitRef ?? data.origin ?? "";
+    const subtitle = tildePath(String(data.filePath ?? data.gitRef ?? data.origin ?? ""));
     const live = this.state.name === "ready" || this.state.name === "submitting";
     const busy = this.state.name !== "ready";
     const decides = live && !!this.view && kind !== "archive";
@@ -243,7 +248,7 @@ export default class Plannotator extends View {
     }
     return h_flex().flex_none().h(44).px(14).gap(10).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child(TITLES[kind] ?? "Plannotator"))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(String(subtitle)))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(subtitle))
       .when(!!version, (el) => el.child(version))
       .when(!!this.api && live, (el) => el.child(this.button(t, "open-browser", "Open in browser", (cx) => cx.open_url(this.api.url("/")))))
       .when(decides && kind !== "plan", (el) => el.child(this.button(t, "close-session",

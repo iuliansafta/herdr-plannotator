@@ -6,7 +6,7 @@
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
-import * as P from "../mod/vendor/plannotator.js";
+import * as P from "../mods/plannotator/vendor/plannotator.js";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-plannotator-e2e-"));
 const dataDir = join(root, "data");
