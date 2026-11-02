@@ -210,18 +210,17 @@ function splitDiffType(diffType: string): { worktreePath: string | null; base: s
 function feedbackDiffContext(session: DiffSession) {
   if (session.prMetadata) return undefined;
   const { worktreePath, base } = splitDiffType(session.diffType || "uncommitted");
-  if (!base) return undefined;
   const committedBase = session.gitContext
-    ? session.base || session.gitContext.defaultBranch || session.gitContext.compareTarget?.fallback || null
-    : null;
+    ? session.base || session.gitContext.defaultBranch || session.gitContext.compareTarget?.fallback || undefined
+    : undefined;
   const commitSha = commitShaFromMode(base);
   const commitInfo = commitSha && session.commitInfo?.sha === commitSha ? session.commitInfo : null;
   return {
     mode: base,
-    base: committedBase ?? undefined,
+    base: committedBase,
     worktreePath,
-    commitSubject: commitSha ? commitInfo?.subject : undefined,
-    commitShortId: commitSha ? commitInfo?.shortSha : undefined,
+    commitSubject: commitInfo?.subject,
+    commitShortId: commitInfo?.shortSha,
     snapshotId: session.snapshotId,
   };
 }

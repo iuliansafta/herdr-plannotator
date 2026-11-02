@@ -204,9 +204,8 @@ async function review(approved: boolean) {
     `review: ${approved ? "approve" : "send"} prints the builder's feedback verbatim`, { record, expected });
 }
 
-/** Files in the user's real data dirs written during this run that mention it. */
-function realDataDirHits(): string[] {
-  const dirs = [join(homedir(), ".plannotator"), join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "plannotator")];
+/** Files under these dirs written during this run that mention it. */
+function runHits(dirs: string[]): string[] {
   const hits: string[] = [];
   const walk = (dir: string) => {
     if (!existsSync(dir)) return;
@@ -228,7 +227,9 @@ try {
   await planApprove();
   await review(false);
   await review(true);
-  const hits = realDataDirHits();
+  check(runHits([dataDir]).length > 0, "the run's own data dir holds its records");
+  const realDirs = [join(homedir(), ".plannotator"), join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "plannotator")];
+  const hits = runHits(realDirs);
   check(hits.length === 0, "nothing from this run written to the user's real data dir", hits);
 } catch (e) {
   failures++;
