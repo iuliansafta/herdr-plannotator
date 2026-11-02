@@ -44,10 +44,19 @@ export async function loadSession(api) {
   const plan = await api.get("/api/plan");
   if (plan.ok) {
     const s = plan.json;
-    const kind = s.mode === "annotate" ? "annotate" : s.mode === "archive" ? "archive" : "plan";
-    return { kind, data: s };
+    const mode = s.mode ?? "plan";
+    const kind = mode.startsWith("annotate") ? "annotate" : mode === "archive" ? "archive" : "plan";
+    return { kind, data: s, native: drawnNatively(s) };
   }
   const diff = await api.get("/api/diff");
-  if (diff.ok) return { kind: "review", data: diff.json };
+  if (diff.ok) return { kind: "review", data: diff.json, native: true };
   throw new Error(`Not a Plannotator session (GET /api/plan ${plan.status}, /api/diff ${diff.status})`);
+}
+
+// Sessions this pane can't draw yet: folders and bundles need the file
+// browser, live apps and raw HTML need a web view.
+const BROWSER_ONLY_MODES = new Set(["annotate-folder", "annotate-bundle", "annotate-app", "archive"]);
+function drawnNatively(s) {
+  if (BROWSER_ONLY_MODES.has(s.mode)) return false;
+  return !s.renderAs || s.renderAs === "markdown";
 }
