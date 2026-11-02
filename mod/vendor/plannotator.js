@@ -2982,7 +2982,401 @@ ${diffContext ? `**Diff:** ${describeDiff(diffContext)}
   output += generalSection;
   return output;
 }
+// ../../src/plannotator/packages/ui/utils/decisionSpec.ts
+var DECISION_NOTE_PLACEHOLDER = "Add a note...";
+function annotationNoun(count) {
+  return count === 1 ? "annotation" : "annotations";
+}
+function buildEmptySpec(input, approvalFlow) {
+  const positive = approvalFlow && input.approvalNotesSupported ? {
+    id: "note-with-approval",
+    label: "Approve with a note…",
+    subtitle: "Approve and send a short note with it",
+    tone: "success",
+    icon: "check",
+    composer: {
+      title: "Approve with a note",
+      actionLabel: "Approve and send note",
+      tone: "success",
+      icon: "check",
+      placeholder: DECISION_NOTE_PLACEHOLDER
+    }
+  } : null;
+  const requestChanges = approvalFlow ? {
+    id: "request-changes",
+    label: "Request changes…",
+    subtitle: "Write overall feedback, sent as a change request",
+    tone: "primary",
+    icon: "send",
+    dividerBefore: positive !== null,
+    composer: {
+      title: "Request changes",
+      actionLabel: "Send as feedback",
+      tone: "primary",
+      icon: "send",
+      placeholder: DECISION_NOTE_PLACEHOLDER
+    }
+  } : {
+    id: "request-changes",
+    label: "Send a note…",
+    subtitle: "Write a note and send it as feedback",
+    tone: "primary",
+    icon: "send",
+    dividerBefore: false,
+    composer: {
+      title: "Send a note",
+      actionLabel: "Send as feedback",
+      tone: "primary",
+      icon: "send",
+      placeholder: DECISION_NOTE_PLACEHOLDER
+    }
+  };
+  return {
+    primary: approvalFlow ? {
+      id: "primary",
+      label: "Approve",
+      title: "Approve: no changes requested",
+      tone: "success",
+      icon: "check"
+    } : {
+      id: "primary",
+      label: "Done",
+      title: input.feedbackDelivered ? "Finish: sends the session record (feedback already shared in the terminal)" : "Finish: records that you reviewed with no feedback",
+      tone: "neutral"
+    },
+    items: positive ? [positive, requestChanges] : [requestChanges]
+  };
+}
+function buildFeedbackSpec(input, approvalFlow) {
+  const { count } = input;
+  const noun = annotationNoun(count);
+  const items = [
+    {
+      id: "note-with-feedback",
+      label: "Send with a note…",
+      subtitle: count > 0 ? `Add an overall note on top of your ${count} ${noun}` : "Add an overall note on top of your feedback",
+      tone: "primary",
+      icon: "send",
+      composer: {
+        title: "Send with a note",
+        actionLabel: "Send feedback with note",
+        tone: "primary",
+        icon: "send",
+        placeholder: DECISION_NOTE_PLACEHOLDER
+      }
+    }
+  ];
+  let dividerPending = true;
+  if (approvalFlow && input.approvalNotesSupported) {
+    items.push({
+      id: "approve-with-notes",
+      label: "Approve with notes",
+      subtitle: count > 0 ? `Approve; your ${count} ${noun} ride along as non-blocking guidance` : "Approve; your edits and attachments ride along as non-blocking guidance",
+      tone: "success",
+      icon: "check",
+      dividerBefore: dividerPending
+    });
+    dividerPending = false;
+  }
+  if (count > 0) {
+    items.push({
+      id: "discard-and-finish",
+      label: approvalFlow ? `Approve, discard ${count} ${noun}…` : `Done, discard ${count} ${noun}…`,
+      subtitle: "Asks to confirm: the annotations are not sent",
+      tone: "destructive",
+      icon: "check",
+      dividerBefore: dividerPending,
+      confirm: approvalFlow ? {
+        title: `Discard ${count} ${noun} and approve?`,
+        message: "These annotations are change requests, including any from other tools. Approving without them tells the agent no changes are needed.",
+        confirmText: "Discard & approve"
+      } : {
+        title: `Discard ${count} ${noun} and finish?`,
+        message: "These annotations are change requests, including any from other tools. Finishing without them sends a positive review record; any direct edits still ride along.",
+        confirmText: "Discard & finish"
+      }
+    });
+  }
+  return {
+    primary: {
+      id: "primary",
+      label: "Send Feedback",
+      shortLabel: "Send",
+      mobileLabel: "Send feedback",
+      title: "Send your feedback to the agent",
+      tone: "primary",
+      icon: "send"
+    },
+    items
+  };
+}
+function buildPlatformSpec(input, platform) {
+  const { count } = input;
+  const { selfAuthored } = platform;
+  const noun = platform.mrLabel === "MR" ? "merge request" : "pull request";
+  const selfReason = `You can't approve your own ${noun} on ${platform.label}.`;
+  const selfReasonShort = `You can't approve your own ${platform.mrLabel}`;
+  const requestChangesUnsupported = platform.requestChangesSupported === false;
+  const requestChangesMuted = selfAuthored && platform.requestChangesSupported === true;
+  const selfRequestChangesShort = `You can't request changes on your own ${platform.mrLabel}`;
+  const postsAsComment = `Posts as a comment; ${platform.label} has no request-changes review`;
+  if (!input.hasFeedback) {
+    return {
+      primary: {
+        id: "primary",
+        label: "Approve",
+        title: selfAuthored ? selfReason : "Approve: no changes needed",
+        tone: "success",
+        icon: "check",
+        ...selfAuthored ? { muted: true } : {}
+      },
+      items: [
+        {
+          id: "note-with-approval",
+          label: "Approve with a comment…",
+          subtitle: selfAuthored ? selfReasonShort : "Opens the submission dialog; the comment rides the review body",
+          tone: "success",
+          icon: "check",
+          ...selfAuthored ? { muted: true } : {}
+        },
+        {
+          id: "request-changes",
+          label: "Request changes…",
+          subtitle: requestChangesMuted ? selfRequestChangesShort : requestChangesUnsupported ? postsAsComment : "Overall feedback, zero line comments, via the dialog",
+          tone: "primary",
+          icon: "send",
+          dividerBefore: true,
+          ...requestChangesMuted ? { muted: true } : {}
+        },
+        ...requestChangesMuted ? [{
+          id: "note-with-feedback",
+          label: "Comment…",
+          subtitle: "Overall feedback as a neutral comment, via the dialog",
+          tone: "primary",
+          icon: "send"
+        }] : []
+      ]
+    };
+  }
+  return {
+    primary: {
+      id: "primary",
+      label: "Post Comments",
+      shortLabel: "Post",
+      mobileLabel: "Post comments",
+      title: `Post review to ${platform.label}`,
+      tone: "primary",
+      icon: "send"
+    },
+    items: [
+      {
+        id: "approve-with-notes",
+        label: "Approve with comments…",
+        subtitle: selfAuthored ? selfReasonShort : "Submission dialog in approve mode",
+        tone: "success",
+        icon: "check",
+        ...selfAuthored ? { muted: true } : {}
+      },
+      {
+        id: "note-with-feedback",
+        label: "Post comments, then…",
+        subtitle: requestChangesUnsupported ? postsAsComment : requestChangesMuted ? `Posts as a neutral comment; you can't request changes on your own ${platform.mrLabel}` : "Request changes or stay neutral, chosen in the dialog",
+        tone: "primary",
+        icon: "send",
+        dividerBefore: true
+      }
+    ]
+  };
+}
+var SEND_ANSWERS = "Send answers";
+var APPROVE_TARGET_MAX = 24;
+function approveTargetSuffix(target) {
+  const name = target?.trim();
+  if (!name)
+    return "";
+  const cut = name.length > APPROVE_TARGET_MAX ? `${name.slice(0, APPROVE_TARGET_MAX - 1)}…` : name;
+  return ` → ${cut}`;
+}
+function planFeedbackPhrase(count, plan) {
+  const answers = Math.min(Math.max(plan.answers, 0), Math.max(count, 0));
+  const others = Math.max(count, 0) - answers;
+  const parts = [
+    answers > 0 ? `${answers} answer${answers === 1 ? "" : "s"}` : "",
+    others > 0 ? `${others} ${annotationNoun(others)}` : "",
+    plan.directEdits ? "direct edits" : ""
+  ].filter(Boolean);
+  if (parts.length === 0)
+    return { text: "feedback", plural: false };
+  const text = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return { text, plural: parts.length > 1 || answers + others > 1 || plan.directEdits };
+}
+function buildPlanSpec(input) {
+  const plan = input.plan ?? {
+    answers: 0,
+    directEdits: false,
+    answersOnly: false,
+    agentName: "The agent"
+  };
+  const target = approveTargetSuffix(plan.approveTarget);
+  if (!input.hasFeedback) {
+    const empty = buildEmptySpec(input, true);
+    return {
+      primary: target ? { ...empty.primary, label: `${empty.primary.label}${target}` } : empty.primary,
+      items: empty.items
+    };
+  }
+  const { text: what, plural } = planFeedbackPhrase(input.count, plan);
+  const sendLabel = plan.answersOnly ? SEND_ANSWERS : "Send Feedback";
+  const items = [
+    {
+      id: "note-with-feedback",
+      label: plan.answersOnly ? "Send answers with a note…" : "Send with a note…",
+      subtitle: `Add an overall note on top of your ${what}`,
+      tone: "primary",
+      icon: "send",
+      composer: {
+        title: "Send with a note",
+        actionLabel: plan.answersOnly ? "Send answers with note" : "Send feedback with note",
+        tone: "primary",
+        icon: "send",
+        placeholder: DECISION_NOTE_PLACEHOLDER
+      }
+    }
+  ];
+  if (input.approvalNotesSupported) {
+    items.push({
+      id: "approve-with-notes",
+      label: `Approve with notes${target}`,
+      subtitle: `Approve; your ${what} ${plural ? "ride" : "rides"} along as non-blocking guidance`,
+      tone: "success",
+      icon: "check",
+      dividerBefore: true
+    });
+  }
+  const pronoun = plural ? "them" : "it";
+  if (plan.savedFilesOnly) {
+    items.push({
+      id: "discard-and-finish",
+      label: "Approve without telling the agent…",
+      subtitle: "Already on disk; the agent isn't told. Asks to confirm",
+      tone: "destructive",
+      icon: "check",
+      dividerBefore: !input.approvalNotesSupported,
+      confirm: {
+        title: "Approve without telling the agent?",
+        message: plan.savedFilesOnly,
+        confirmText: "Approve"
+      }
+    });
+  } else
+    items.push({
+      id: "discard-and-finish",
+      label: `Approve, discard ${what}…`,
+      subtitle: input.approvalNotesSupported ? "Asks to confirm: nothing is sent" : `${plan.agentName} can't take notes on approval; asks to confirm`,
+      tone: "destructive",
+      icon: "check",
+      dividerBefore: !input.approvalNotesSupported,
+      confirm: {
+        title: `Discard ${what} and approve?`,
+        message: input.approvalNotesSupported ? `Approving without ${pronoun} tells the agent no changes are needed.` : `${plan.agentName} doesn't take feedback on approval, so your ${what} would be lost. To send ${pronoun}, use ${sendLabel}.`,
+        confirmText: "Discard & approve"
+      }
+    });
+  return {
+    primary: plan.answersOnly ? {
+      id: "primary",
+      label: SEND_ANSWERS,
+      mobileLabel: SEND_ANSWERS,
+      title: "Send your answers to the agent",
+      tone: "primary",
+      icon: "send"
+    } : {
+      id: "primary",
+      label: "Send Feedback",
+      shortLabel: "Send",
+      mobileLabel: "Send feedback",
+      title: "Send your feedback to the agent",
+      tone: "primary",
+      icon: "send"
+    },
+    items
+  };
+}
+function buildDecisionSpec(input) {
+  if (input.platform)
+    return buildPlatformSpec(input, input.platform);
+  if (input.app === "plan")
+    return buildPlanSpec(input);
+  const approvalFlow = input.app === "review" || input.gate;
+  return input.hasFeedback ? buildFeedbackSpec(input, approvalFlow) : buildEmptySpec(input, approvalFlow);
+}
+// ../../src/plannotator/packages/ui/utils/generateIdentity.ts
+var FALLBACK_ADJECTIVES = [
+  "swift",
+  "gentle",
+  "brave",
+  "calm",
+  "clever",
+  "bright",
+  "quiet",
+  "bold",
+  "eager",
+  "kind",
+  "lucky",
+  "merry",
+  "nimble",
+  "proud",
+  "sunny",
+  "witty"
+];
+var FALLBACK_NOUNS = [
+  "falcon",
+  "crystal",
+  "river",
+  "meadow",
+  "harbor",
+  "comet",
+  "maple",
+  "otter",
+  "summit",
+  "lantern",
+  "willow",
+  "ember",
+  "pebble",
+  "breeze",
+  "orchid",
+  "canyon"
+];
+function pick(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+var fallbackIdentityGenerator = () => `${pick(FALLBACK_ADJECTIVES)}-${pick(FALLBACK_NOUNS)}-tater`;
+var generator = fallbackIdentityGenerator;
+function generateIdentity() {
+  return generator();
+}
+// ../../src/plannotator/packages/ui/utils/generateId.ts
+function generateId(prefix) {
+  const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+  return prefix ? `${prefix}-${id}` : id;
+}
+
 // ../../src/plannotator/packages/review-editor/reviewDecision.ts
+function resolveReviewDecisionAction(id) {
+  switch (id) {
+    case "primary":
+      return { kind: "primary" };
+    case "request-changes":
+    case "note-with-feedback":
+      return { kind: "note" };
+    case "note-with-approval":
+      return { kind: "approve-with-notes", withAnnotations: false };
+    case "approve-with-notes":
+      return { kind: "approve-with-notes", withAnnotations: true };
+    case "discard-and-finish":
+      return { kind: "discard" };
+  }
+}
 function buildReviewApprovalBody(input) {
   const note = input.note?.trim() ?? "";
   if (input.withAnnotations) {
@@ -3002,8 +3396,90 @@ ${input.feedbackMarkdown}` : input.feedbackMarkdown,
     annotations: []
   };
 }
+function createGeneralReviewComment(text, author) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return null;
+  return {
+    id: generateId("review-note"),
+    type: "comment",
+    scope: "general",
+    filePath: "",
+    lineStart: 0,
+    lineEnd: 0,
+    side: "new",
+    text: trimmed,
+    createdAt: Date.now(),
+    ...author ? { author } : {}
+  };
+}
+
+// ../../src/plannotator/packages/editor/planDecision.ts
+function resolvePlanDecisionAction(id) {
+  switch (id) {
+    case "primary":
+      return { kind: "primary" };
+    case "note-with-approval":
+      return { kind: "note", route: "approve" };
+    case "request-changes":
+    case "note-with-feedback":
+      return { kind: "note", route: "deny" };
+    case "approve-with-notes":
+      return { kind: "approve", discardFeedback: false };
+    case "discard-and-finish":
+      return { kind: "approve", discardFeedback: true };
+  }
+}
+
+// ../../src/plannotator/packages/editor/annotateDecision.ts
+function resolveAnnotateDecisionAction(id, ctx) {
+  switch (id) {
+    case "primary":
+      return { kind: "primary" };
+    case "note-with-approval":
+      return ctx.gate ? { kind: "note", route: "approve", approvalFraming: false } : { kind: "note", route: "feedback", approvalFraming: false };
+    case "request-changes":
+    case "note-with-feedback":
+      return { kind: "note", route: "feedback", approvalFraming: false };
+    case "approve-with-notes":
+      return { kind: "approve-with-notes" };
+    case "discard-and-finish":
+      return ctx.gate ? { kind: "discard", route: "approve" } : { kind: "discard", route: "feedback" };
+  }
+}
 // ../../src/plannotator/packages/editor/questionDecision.ts
+var countQuestionAnswers = (lists) => {
+  let count = 0;
+  for (const list of lists)
+    for (const a of list)
+      if (a.questionAnswer != null)
+        count++;
+  return count;
+};
+var isAnswersOnlyFeedback = (input) => input.answerCount > 0 && input.feedbackCount === input.answerCount && !input.hasDirectEdits && !input.hasSavedFileChanges;
 var planDenyFeedbackFields = (payload, answersOnly) => answersOnly ? { feedback: payload, answersOnly: true } : { feedback: payload };
+
+// ../../src/plannotator/packages/core/agents.ts
+var AGENT_CONFIG = {
+  "claude-code": { name: "Claude Code", badge: "bg-orange-500/15 text-orange-400", aiProviderTypes: ["claude-agent-sdk"] },
+  amp: { name: "Amp", badge: "bg-lime-500/15 text-lime-400" },
+  droid: { name: "Droid", badge: "bg-cyan-500/15 text-cyan-400" },
+  "kiro-cli": { name: "Kiro CLI", badge: "bg-amber-500/15 text-amber-400" },
+  opencode: { name: "OpenCode", badge: "bg-emerald-500/15 text-emerald-400", aiProviderTypes: ["opencode-sdk"] },
+  "copilot-cli": { name: "GitHub Copilot", badge: "bg-blue-500/15 text-blue-400" },
+  pi: { name: "Pi", badge: "bg-violet-500/15 text-violet-400", aiProviderTypes: ["pi-sdk"] },
+  codex: { name: "Codex", badge: "bg-purple-500/15 text-purple-400", aiProviderTypes: ["codex-sdk"] },
+  "gemini-cli": { name: "Gemini CLI", badge: "bg-sky-500/15 text-sky-400" },
+  "oh-my-pi": { name: "Oh My Pi", badge: "bg-fuchsia-500/15 text-fuchsia-400" },
+  "mistral-vibe": { name: "Mistral Vibe", badge: "bg-rose-500/15 text-rose-400" },
+  "qwen-code": { name: "Qwen Code", badge: "bg-indigo-500/15 text-indigo-400", aiProviderTypes: ["qwen-sdk"] },
+  dsh: { name: "DeepSeek Harness", badge: "bg-teal-500/15 text-teal-400" }
+};
+function getAgentName(origin) {
+  if (origin && origin in AGENT_CONFIG)
+    return AGENT_CONFIG[origin].name;
+  return "Coding Agent";
+}
 
 // ../../src/plannotator/packages/core/agent-switch.ts
 var AGENT_SWITCH_NAME_MAX = 128;
@@ -3034,6 +3510,7 @@ var SERVER_SESSION_FIELD = "serverSession";
 
 // vendor-src/entry.ts
 var PINNED_VERSION = "0.28.45";
+var newClientId = () => `${Date.now()}-${generateId()}`;
 var ANNOTATE_NO_FEEDBACK_SENTENCE = "User reviewed the document and has no feedback.";
 var EMPTY_FEEDBACK_SENTINELS = new Set([
   "",
@@ -3043,21 +3520,41 @@ var EMPTY_FEEDBACK_SENTINELS = new Set([
 var nextGeneration = (input) => (input.draftGeneration ?? 0) + 1;
 var withServerSession = (body, session) => typeof session.serverSession === "string" && session.serverSession ? { ...body, [SERVER_SESSION_FIELD]: session.serverSession } : body;
 var withServerSessionQuery = (url, session) => typeof session.serverSession === "string" && session.serverSession ? `${url}${url.includes("?") ? "&" : "?"}${SERVER_SESSION_FIELD}=${encodeURIComponent(session.serverSession)}` : url;
-var post = (path, body, session) => ({
+var withDraftClient = (path, clientId) => clientId ? `${path}${path.includes("?") ? "&" : "?"}client=${encodeURIComponent(clientId)}` : path;
+var post = (path, body, input) => ({
   method: "POST",
   path,
-  body: withServerSession(body, session)
+  body: withServerSession(body, input.session)
 });
-function effectiveAgent(session, surface) {
-  const settings = parseAgentSwitchConfig(session.serverConfig?.agentSwitch) ?? { switchTo: surface === "plan" ? "build" : "disabled" };
+function effectiveAgent(input, surface) {
+  const stored = parseAgentSwitchConfig(input.session.serverConfig?.agentSwitch) ?? input.settings?.agentSwitch ?? null;
+  const settings = stored ?? { switchTo: surface === "plan" ? "build" : "disabled" };
   if (settings.switchTo === "disabled")
     return;
   if (settings.switchTo === "custom")
     return settings.customName || undefined;
   return settings.switchTo;
 }
-var PLAN_SAVE_DEFAULT = { enabled: true };
-var PERMISSION_MODE_DEFAULT = "acceptEdits";
+function identity(input) {
+  const fromServer = input.session.serverConfig?.displayName;
+  return typeof fromServer === "string" && fromServer ? fromServer : input.settings?.displayName || generateIdentity();
+}
+var permissionMode = (input) => input.settings?.permissionMode || "acceptEdits";
+function planSave(input) {
+  const saved = input.settings?.planSave;
+  const enabled = saved ? saved.enabled !== false : true;
+  return { enabled, ...saved?.customPath ? { customPath: saved.customPath } : {} };
+}
+var ANNOTATE_MODES = new Set(["annotate", "annotate-last", "annotate-folder", "annotate-bundle", "annotate-app"]);
+function decisionApp(input) {
+  if (isReview(input))
+    return "review";
+  if (ANNOTATE_MODES.has(input.session.mode))
+    return "annotate";
+  if (input.session.mode === undefined)
+    return "plan";
+  throw new Error(`no decision control for a ${input.session.mode} session`);
+}
 function feedbackHeading(session) {
   switch (session.mode) {
     case "annotate":
@@ -3073,7 +3570,8 @@ function feedbackHeading(session) {
       return { title: "Plan Feedback", subject: "plan" };
   }
 }
-var hasDocFeedback = (input) => input.annotations.length > 0 || (input.globalAttachments?.length ?? 0) > 0;
+var docFeedbackCount = (input) => input.annotations.length + (input.globalAttachments?.length ?? 0);
+var hasDocFeedback = (input) => docFeedbackCount(input) > 0;
 function docFeedback(input) {
   if (!hasDocFeedback(input))
     return ANNOTATE_NO_FEEDBACK_SENTENCE;
@@ -3083,53 +3581,58 @@ function docFeedback(input) {
   }).replace(/^\n+/, "");
 }
 var planRevisionField = (session) => session.mode === undefined && typeof session.planRevision === "number" ? { planRevision: session.planRevision } : {};
-function planApprove(input) {
-  const { session } = input;
-  const agentSwitch = effectiveAgent(session, "plan");
-  const withNotes = session.approvalNotesSupported === true && hasDocFeedback(input);
-  return post("/api/approve", {
-    draftGeneration: nextGeneration(input),
-    ...planRevisionField(session),
-    ...session.origin === "claude-code" ? { permissionMode: PERMISSION_MODE_DEFAULT } : {},
-    ...agentSwitch ? { agentSwitch } : {},
-    planSave: PLAN_SAVE_DEFAULT,
-    ...withNotes ? { feedback: docFeedback(input) } : {}
-  }, session);
-}
-function planDeny(input) {
-  return post("/api/deny", {
+var answersOnly = (input) => isAnswersOnlyFeedback({
+  answerCount: countQuestionAnswers([input.annotations]),
+  feedbackCount: docFeedbackCount(input),
+  hasDirectEdits: false,
+  hasSavedFileChanges: false
+});
+function planApprove(input, options) {
+  const agentSwitch = effectiveAgent(input, "plan");
+  return post(withDraftClient("/api/approve", input.clientId), {
     draftGeneration: nextGeneration(input),
     ...planRevisionField(input.session),
-    ...planDenyFeedbackFields(docFeedback(input), false),
-    planSave: PLAN_SAVE_DEFAULT
-  }, input.session);
+    ...input.session.origin === "claude-code" ? { permissionMode: permissionMode(input) } : {},
+    ...agentSwitch ? { agentSwitch } : {},
+    planSave: planSave(input),
+    ...!options?.discardFeedback && hasDocFeedback(input) ? { feedback: docFeedback(input) } : {}
+  }, input);
 }
-function annotateSend(input) {
-  const feedback = docFeedback(input);
-  return post("/api/feedback", {
+function planDeny(input) {
+  return post(withDraftClient("/api/deny", input.clientId), {
+    draftGeneration: nextGeneration(input),
+    ...planRevisionField(input.session),
+    ...planDenyFeedbackFields(docFeedback(input), answersOnly(input)),
+    planSave: planSave(input)
+  }, input);
+}
+function annotateSend(input, options) {
+  const discard = options?.discard === true;
+  const feedback = discard ? ANNOTATE_NO_FEEDBACK_SENTENCE : docFeedback(input);
+  return post(withDraftClient("/api/feedback", input.clientId), {
     draftGeneration: nextGeneration(input),
     feedback,
-    annotations: input.annotations,
+    annotations: discard ? [] : input.annotations,
     codeAnnotations: [],
     ...EMPTY_FEEDBACK_SENTINELS.has(feedback) ? { nothingToSend: true } : {}
-  }, input.session);
+  }, input);
 }
-function annotateApprove(input) {
+function annotateApprove(input, options) {
+  const path = withDraftClient("/api/approve", input.clientId);
   const draftGeneration = nextGeneration(input);
   if (input.session.approvalNotesSupported !== true)
-    return post("/api/approve", { draftGeneration }, input.session);
-  return post("/api/approve", {
+    return post(path, { draftGeneration }, input);
+  const discard = options?.discard === true;
+  return post(path, {
     draftGeneration,
-    feedback: hasDocFeedback(input) ? docFeedback(input) : "",
-    annotations: input.annotations,
+    feedback: !discard && hasDocFeedback(input) ? docFeedback(input) : "",
+    annotations: discard ? [] : input.annotations,
     codeAnnotations: []
-  }, input.session);
+  }, input);
 }
 function annotateExit(input) {
-  return {
-    method: "POST",
-    path: withServerSessionQuery(`/api/exit?draftGeneration=${nextGeneration(input)}`, input.session)
-  };
+  const path = withServerSessionQuery(`/api/exit?draftGeneration=${nextGeneration(input)}`, input.session);
+  return { method: "POST", path: withDraftClient(path, input.clientId) };
 }
 var WORKTREE_SUB_TYPES = ["since-base", "local-vs-remote", "uncommitted", "staged", "unstaged", "last-commit", "branch", "merge-base", "all"];
 function splitDiffType(diffType) {
@@ -3172,40 +3675,164 @@ function reviewFeedback(input) {
   const { session } = input;
   return exportReviewFeedback(input.annotations, session.prMetadata, feedbackDiffContext(session), prReviewScopeLabel(session));
 }
+var reviewDecisionPath = (path, clientId) => clientId ? `${path}?client=${clientId}` : path;
 function reviewSend(input) {
-  const { session } = input;
+  const path = reviewDecisionPath("/api/feedback", input.clientId);
   const draftGeneration = nextGeneration(input);
   if (input.approved) {
-    const withAnnotations = session.approvalNotesSupported === true && input.annotations.length > 0;
-    return post("/api/feedback", buildReviewApprovalBody({
+    return post(path, buildReviewApprovalBody({
       draftGeneration,
-      withAnnotations,
+      note: input.note,
+      withAnnotations: input.withAnnotations === true,
       feedbackMarkdown: reviewFeedback(input),
       annotations: input.annotations
-    }), session);
+    }), input);
   }
-  const agentSwitch = effectiveAgent(session, "review");
-  return post("/api/feedback", {
+  const agentSwitch = effectiveAgent(input, "review");
+  return post(path, {
     draftGeneration,
     approved: false,
     feedback: reviewFeedback(input),
     annotations: input.annotations,
     ...agentSwitch ? { agentSwitch } : {}
-  }, session);
+  }, input);
+}
+function reviewExit(input) {
+  const exitUrl = input.clientId ? `/api/exit?client=${input.clientId}&` : "/api/exit?";
+  return { method: "POST", path: withServerSessionQuery(`${exitUrl}draftGeneration=${nextGeneration(input)}`, input.session) };
+}
+function decisionSpecInput(kind, input) {
+  const approvalNotesSupported = input.session.approvalNotesSupported === true;
+  if (kind === "review") {
+    const count = input.annotations.length;
+    return { app: "review", gate: true, count, hasFeedback: count > 0, approvalNotesSupported };
+  }
+  const doc = input;
+  const count = docFeedbackCount(doc);
+  if (kind === "annotate") {
+    return { app: "annotate", gate: doc.session.gate === true, count, hasFeedback: count > 0, approvalNotesSupported, feedbackDelivered: false };
+  }
+  return {
+    app: "plan",
+    gate: true,
+    count,
+    hasFeedback: count > 0,
+    approvalNotesSupported,
+    plan: {
+      answers: countQuestionAnswers([doc.annotations]),
+      directEdits: false,
+      answersOnly: answersOnly(doc),
+      agentName: getAgentName(doc.session.origin),
+      approveTarget: doc.session.origin === "opencode" ? doc.approveTarget : undefined
+    }
+  };
+}
+function documentNote(input, text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return null;
+  return {
+    id: generateId("global-note"),
+    blockId: "",
+    startOffset: 0,
+    endOffset: 0,
+    type: "GLOBAL_COMMENT",
+    text: trimmed,
+    originalText: "",
+    createdA: Date.now(),
+    author: identity(input)
+  };
+}
+function reviewNote(input, text) {
+  const note = createGeneralReviewComment(text, identity(input));
+  if (note && input.session.localDraftTarget)
+    note.localReviewTarget = input.session.localDraftTarget;
+  return note;
+}
+var thenDismiss = (input, decision) => [decision, draftDismiss(input)];
+function decisionRequest(id, input, note) {
+  if (isReview(input)) {
+    const action = resolveReviewDecisionAction(id);
+    switch (action.kind) {
+      case "primary":
+        return { requests: [reviewSend({ ...input, approved: input.annotations.length === 0 })] };
+      case "note": {
+        const added = reviewNote(input, note ?? "");
+        if (!added)
+          return null;
+        return { requests: [reviewSend({ ...input, annotations: [...input.annotations, added], approved: false })], note: added };
+      }
+      case "discard":
+        return { requests: [reviewSend({ ...input, approved: true })] };
+      case "approve-with-notes":
+        if (!action.withAnnotations && !note?.trim())
+          return null;
+        return { requests: [reviewSend({ ...input, approved: true, note, withAnnotations: action.withAnnotations })] };
+    }
+  }
+  const withNote = () => {
+    const added = documentNote(input, note ?? "");
+    return added ? { doc: { ...input, annotations: [...input.annotations, added] }, added } : null;
+  };
+  if (decisionApp(input) === "plan") {
+    const action = resolvePlanDecisionAction(id);
+    switch (action.kind) {
+      case "primary":
+        return { requests: [hasDocFeedback(input) ? planDeny(input) : planApprove(input)] };
+      case "note": {
+        const n = withNote();
+        if (!n)
+          return null;
+        return { requests: [action.route === "approve" ? planApprove(n.doc) : planDeny(n.doc)], note: n.added };
+      }
+      case "approve":
+        return { requests: [planApprove(input, { discardFeedback: action.discardFeedback })] };
+    }
+  }
+  const gate = input.session.gate === true;
+  const action = resolveAnnotateDecisionAction(id, { gate });
+  switch (action.kind) {
+    case "primary":
+      return { requests: thenDismiss(input, gate && !hasDocFeedback(input) ? annotateApprove(input) : annotateSend(input)) };
+    case "note": {
+      const n = withNote();
+      if (!n)
+        return null;
+      return { requests: thenDismiss(n.doc, action.route === "approve" ? annotateApprove(n.doc) : annotateSend(n.doc)), note: n.added };
+    }
+    case "approve-with-notes":
+      return { requests: thenDismiss(input, annotateApprove(input)) };
+    case "discard":
+      return { requests: thenDismiss(input, action.route === "approve" ? annotateApprove(input, { discard: true }) : annotateSend(input, { discard: true })) };
+  }
 }
 var isReview = (input) => !("blocks" in input);
+function draftPath(input) {
+  const target = input.session?.localDraftTarget;
+  if (typeof target !== "string" || !target)
+    return "/api/draft";
+  const client = input.clientId ? `&client=${encodeURIComponent(input.clientId)}` : "";
+  return `/api/draft?target=${encodeURIComponent(target)}${client}`;
+}
+var draftDeletePath = (input, generation) => {
+  const path = draftPath(input);
+  return `${path}${path.includes("?") ? "&" : "?"}generation=${generation}`;
+};
+function draftLoad(input) {
+  return { method: "GET", path: draftPath(input) };
+}
 function draftSave(input) {
   const draftGeneration = nextGeneration(input);
   const globalAttachments = isReview(input) ? [] : input.globalAttachments ?? [];
   if (input.annotations.length === 0 && globalAttachments.length === 0) {
-    return { method: "DELETE", path: `/api/draft?generation=${draftGeneration}`, draftGeneration };
+    return { method: "DELETE", path: draftDeletePath(input, draftGeneration), draftGeneration };
   }
   const body = isReview(input) ? { codeAnnotations: input.annotations, descriptionAnnotations: [], commentAnnotations: [], draftGeneration, ts: Date.now() } : { annotations: input.annotations, codeAnnotations: [], globalAttachments, draftGeneration, ts: Date.now() };
-  return { method: "POST", path: "/api/draft", body, draftGeneration };
+  return { method: "POST", path: draftPath(input), body, draftGeneration };
 }
 function draftDismiss(input) {
   const draftGeneration = nextGeneration(input);
-  return { method: "DELETE", path: `/api/draft?generation=${draftGeneration}`, draftGeneration };
+  return { method: "DELETE", path: draftDeletePath(input, draftGeneration), draftGeneration };
 }
 var readGeneration = (value) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 function draftRestore(draft, draftGeneration = 0) {
@@ -3223,16 +3850,24 @@ export {
   annotateApprove,
   annotateExit,
   annotateSend,
+  buildDecisionSpec,
+  decisionApp,
+  decisionRequest,
+  decisionSpecInput,
   docFeedback,
   draftDismiss,
+  draftLoad,
   draftRestore,
   draftSave,
   exportAnnotations,
   exportReviewFeedback,
+  generateIdentity,
+  newClientId,
   parseMarkdownToBlocks,
   planApprove,
   planDeny,
   planDenyFeedback,
+  reviewExit,
   reviewFeedback,
   reviewSend,
   wrapFeedbackForAgent

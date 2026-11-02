@@ -1,6 +1,7 @@
 // The vendor bundle's surface. Upstream code is re-exported untouched; the
-// builders below reproduce what Plannotator's React app POSTs, so the server
-// and the agent cannot tell this client from the browser.
+// builders below reproduce what Plannotator's React app sends, so the server
+// and the agent cannot tell this client from the browser. Line citations are
+// to the tag in PINNED_VERSION.
 
 declare const PLANNOTATOR_PINNED_VERSION: string;
 /** The plannotator release this bundle was built from (tools/build-vendor.ts). */
@@ -13,13 +14,36 @@ export {
 } from "@plannotator/ui/utils/parser";
 export { exportReviewFeedback } from "@plannotator/review-editor/utils/exportFeedback";
 export { planDenyFeedback } from "@plannotator/core/feedback-templates";
+export { buildDecisionSpec } from "@plannotator/ui/utils/decisionSpec";
+export type {
+  DecisionActionId,
+  DecisionComposer,
+  DecisionConfirm,
+  DecisionMenuItem,
+  DecisionPlanInput,
+  DecisionPrimary,
+  DecisionSpec,
+  DecisionSpecInput,
+  DecisionTone,
+} from "@plannotator/ui/utils/decisionSpec";
+export { generateIdentity } from "@plannotator/ui/utils/generateIdentity";
 
 import { exportAnnotations } from "@plannotator/ui/utils/parser";
 import { commitShaFromMode, exportReviewFeedback } from "@plannotator/review-editor/utils/exportFeedback";
-import { buildReviewApprovalBody } from "@plannotator/review-editor/reviewDecision";
-import { planDenyFeedbackFields } from "@plannotator/editor/questionDecision";
+import {
+  buildReviewApprovalBody,
+  createGeneralReviewComment,
+  resolveReviewDecisionAction,
+} from "@plannotator/review-editor/reviewDecision";
+import { resolvePlanDecisionAction } from "@plannotator/editor/planDecision";
+import { resolveAnnotateDecisionAction } from "@plannotator/editor/annotateDecision";
+import { countQuestionAnswers, isAnswersOnlyFeedback, planDenyFeedbackFields } from "@plannotator/editor/questionDecision";
+import { getAgentName } from "@plannotator/core/agents";
 import { parseAgentSwitchConfig } from "@plannotator/core/agent-switch";
 import { SERVER_SESSION_FIELD } from "@plannotator/core/server-session";
+import { generateId } from "@plannotator/ui/utils/generateId";
+import { generateIdentity } from "@plannotator/ui/utils/generateIdentity";
+import type { DecisionActionId, DecisionSpecInput } from "@plannotator/ui/utils/decisionSpec";
 import type { Annotation, Block, CodeAnnotation, ImageAttachment } from "@plannotator/ui/types";
 
 /** `/api/plan` JSON for plan and annotate sessions. */
@@ -28,27 +52,52 @@ export type PlanSession = Record<string, any>;
 export type DiffSession = Record<string, any>;
 
 /**
- * `draftGeneration` is the client's draft counter: the highest generation it
- * has sent or adopted (0 at start). A decision sends counter + 1; `draftSave`
- * and `draftDismiss` advance it and return the new value.
+ * What a browser keeps in cookies that changes a request. Each field is
+ * optional; a missing one is what a first-time browser sends. `agentSwitch`
+ * and `displayName` also live in config.json (`session.serverConfig`), which
+ * wins over these, as the web app's configStore does.
  */
-export interface DocInput {
+export interface BrowserSettings {
+  /** `plannotator-permission-mode`: what Claude Code switches to after a plan approval. Default `acceptEdits`. */
+  permissionMode?: "acceptEdits" | "auto" | "bypassPermissions" | "default";
+  /** `plannotator-save-enabled` / `plannotator-save-path`. Default `{ enabled: true }`. */
+  planSave?: { enabled: boolean; customPath?: string | null };
+  /** `plannotator-agent-switch` / `plannotator-agent-custom`. Default: `build` on plan approval, none on review feedback. */
+  agentSwitch?: { switchTo: string; customName?: string } | null;
+  /** `plannotator-identity`: the `author` of a note the decision control adds. Default: a fresh tater name. */
+  displayName?: string;
+}
+
+/**
+ * Shared by every input. `draftGeneration` is the client's draft counter: the
+ * highest generation it has sent or adopted (0 at start). A decision sends
+ * counter + 1; `draftSave` and `draftDismiss` advance it and return the new
+ * value. `clientId` names this page load on decision and review draft URLs
+ * (`newClientId()`); keep one per pane.
+ */
+interface CommonInput {
+  draftGeneration?: number;
+  clientId?: string;
+  settings?: BrowserSettings;
+}
+
+export interface DocInput extends CommonInput {
   session: PlanSession;
   blocks: Block[];
   annotations: Annotation[];
   globalAttachments?: ImageAttachment[];
-  draftGeneration?: number;
+  /** OpenCode only: the agent an approval hands off to, as the web shows it ("Approve → build"). */
+  approveTarget?: string;
 }
 
-export interface ReviewInput {
+export interface ReviewInput extends CommonInput {
   session: DiffSession;
   annotations: CodeAnnotation[];
-  draftGeneration?: number;
 }
 
 /** One HTTP request the web app would send. */
 export interface Decision {
-  method: "POST" | "DELETE";
+  method: "GET" | "POST" | "DELETE";
   /** Path plus query, relative to the session origin. */
   path: string;
   body?: unknown;
@@ -63,6 +112,22 @@ export interface RestoredDraft {
   draftGeneration: number;
 }
 
+/**
+ * What one decision-control action sends. Run `requests` in order and stop
+ * at the first failure. `note` is the comment the web adds to the list before
+ * sending (it is already in the body); keep it in the view if the send fails.
+ */
+export interface DecisionRequest {
+  requests: Decision[];
+  note?: Annotation | CodeAnnotation;
+}
+
+export type DecisionApp = "plan" | "annotate" | "review";
+
+// packages/editor/App.tsx:2822 draftClientId (review-editor/App.tsx:726 uses a 7-char base36 suffix instead of a UUID)
+/** A page id for `clientId`: what the plan / annotate editor mints per page load. */
+export const newClientId = (): string => `${Date.now()}-${generateId()}`;
+
 // Ported from packages/editor/annotateSubmission.ts and directEdits.ts, which
 // import the `diff` npm package for direct edits this client never makes.
 const ANNOTATE_NO_FEEDBACK_SENTENCE = "User reviewed the document and has no feedback.";
@@ -74,7 +139,7 @@ const EMPTY_FEEDBACK_SENTINELS = new Set([
 
 const nextGeneration = (input: { draftGeneration?: number }) => (input.draftGeneration ?? 0) + 1;
 
-// packages/ui/utils/serverSession.ts withServerSession / withServerSessionQuery
+// packages/ui/utils/serverSession.ts:34 withServerSession, :39 withServerSessionQuery
 const withServerSession = <T extends object>(body: T, session: Record<string, any>) =>
   typeof session.serverSession === "string" && session.serverSession
     ? { ...body, [SERVER_SESSION_FIELD]: session.serverSession }
@@ -84,28 +149,53 @@ const withServerSessionQuery = (url: string, session: Record<string, any>) =>
     ? `${url}${url.includes("?") ? "&" : "?"}${SERVER_SESSION_FIELD}=${encodeURIComponent(session.serverSession)}`
     : url;
 
-const post = (path: string, body: object, session: Record<string, any>): Decision => ({
+// packages/editor/App.tsx:2823 withDraftClient
+const withDraftClient = (path: string, clientId: string | undefined) =>
+  clientId ? `${path}${path.includes("?") ? "&" : "?"}client=${encodeURIComponent(clientId)}` : path;
+
+const post = (path: string, body: object, input: { session: Record<string, any> }): Decision => ({
   method: "POST",
   path,
-  body: withServerSession(body, session),
+  body: withServerSession(body, input.session),
 });
 
-// packages/ui/utils/agentSwitch.ts getAgentSwitchSettings + getEffectiveAgentName,
-// with config.json (`serverConfig.agentSwitch`) over the surface default.
-function effectiveAgent(session: Record<string, any>, surface: "plan" | "review"): string | undefined {
-  const settings = parseAgentSwitchConfig(session.serverConfig?.agentSwitch)
-    ?? { switchTo: surface === "plan" ? "build" : "disabled" };
+// packages/ui/utils/agentSwitch.ts:68 getAgentSwitchSettings + :95 getEffectiveAgentName,
+// with config.json over the cookie (packages/ui/config/settings.ts:790 agentSwitch, configStore.init).
+function effectiveAgent(input: CommonInput & { session: Record<string, any> }, surface: "plan" | "review"): string | undefined {
+  const stored = parseAgentSwitchConfig(input.session.serverConfig?.agentSwitch) ?? input.settings?.agentSwitch ?? null;
+  const settings = stored ?? { switchTo: surface === "plan" ? "build" : "disabled" };
   if (settings.switchTo === "disabled") return undefined;
   if (settings.switchTo === "custom") return settings.customName || undefined;
   return settings.switchTo;
 }
 
-// Defaults a first-time browser sends (no cookies): planSave on, permission
-// mode `acceptEdits`, Obsidian / Bear / Octarine off.
-const PLAN_SAVE_DEFAULT = { enabled: true };
-const PERMISSION_MODE_DEFAULT = "acceptEdits";
+// packages/ui/config/settings.ts:156 displayName (config.json > cookie > generated)
+function identity(input: CommonInput & { session: Record<string, any> }): string {
+  const fromServer = input.session.serverConfig?.displayName;
+  return typeof fromServer === "string" && fromServer ? fromServer : input.settings?.displayName || generateIdentity();
+}
 
-/** Who the export is about, from the session mode (App.tsx setAnnotateSource). */
+// packages/ui/utils/permissionMode.ts:55 getPermissionModeSettings (cookie only, no serverKey)
+const permissionMode = (input: CommonInput) => input.settings?.permissionMode || "acceptEdits";
+
+// packages/editor/App.tsx:4569 body.planSave from packages/ui/utils/planSave.ts:28 getPlanSaveSettings (cookie only)
+function planSave(input: CommonInput) {
+  const saved = input.settings?.planSave;
+  const enabled = saved ? saved.enabled !== false : true;
+  return { enabled, ...(saved?.customPath ? { customPath: saved.customPath } : {}) };
+}
+
+const ANNOTATE_MODES = new Set(["annotate", "annotate-last", "annotate-folder", "annotate-bundle", "annotate-app"]);
+
+/** Which decision control a session gets. */
+export function decisionApp(input: DocInput | ReviewInput): DecisionApp {
+  if (isReview(input)) return "review";
+  if (ANNOTATE_MODES.has(input.session.mode)) return "annotate";
+  if (input.session.mode === undefined) return "plan";
+  throw new Error(`no decision control for a ${input.session.mode} session`);
+}
+
+/** Who the export is about, from the session mode (packages/editor/App.tsx:3628 getCurrentFeedbackPayload). */
 function feedbackHeading(session: PlanSession): { title: string; subject: string } {
   switch (session.mode) {
     case "annotate":
@@ -122,11 +212,12 @@ function feedbackHeading(session: PlanSession): { title: string; subject: string
   }
 }
 
-const hasDocFeedback = (input: DocInput) =>
-  input.annotations.length > 0 || (input.globalAttachments?.length ?? 0) > 0;
+// packages/editor/App.tsx:2467 feedbackAnnotationCount, :4462 hasFeedbackToSend
+const docFeedbackCount = (input: DocInput) => input.annotations.length + (input.globalAttachments?.length ?? 0);
+const hasDocFeedback = (input: DocInput) => docFeedbackCount(input) > 0;
 
 /** The `feedback` markdown the agent receives for a document session. */
-// packages/editor/App.tsx:3540 getCurrentFeedbackPayload (buildCompleteAnnotateFeedback)
+// packages/editor/App.tsx:3607 getCurrentFeedbackPayload (buildCompleteAnnotateFeedback)
 export function docFeedback(input: DocInput): string {
   if (!hasDocFeedback(input)) return ANNOTATE_NO_FEEDBACK_SENTENCE;
   const { title, subject } = feedbackHeading(input.session);
@@ -138,64 +229,75 @@ export function docFeedback(input: DocInput): string {
 const planRevisionField = (session: PlanSession) =>
   session.mode === undefined && typeof session.planRevision === "number" ? { planRevision: session.planRevision } : {};
 
-// packages/editor/App.tsx:4434 handleApprove
-export function planApprove(input: DocInput): Decision {
-  const { session } = input;
-  const agentSwitch = effectiveAgent(session, "plan");
-  const withNotes = session.approvalNotesSupported === true && hasDocFeedback(input);
-  return post("/api/approve", {
-    draftGeneration: nextGeneration(input),
-    ...planRevisionField(session),
-    ...(session.origin === "claude-code" ? { permissionMode: PERMISSION_MODE_DEFAULT } : {}),
-    ...(agentSwitch ? { agentSwitch } : {}),
-    planSave: PLAN_SAVE_DEFAULT,
-    ...(withNotes ? { feedback: docFeedback(input) } : {}),
-  }, session);
-}
+// packages/editor/App.tsx:3508 questionAnswerCount, :3509 answersOnlyFeedback
+const answersOnly = (input: DocInput) =>
+  isAnswersOnlyFeedback({
+    answerCount: countQuestionAnswers([input.annotations]),
+    feedbackCount: docFeedbackCount(input),
+    hasDirectEdits: false,
+    hasSavedFileChanges: false,
+  });
 
-// packages/editor/App.tsx:4553 handleDeny
-export function planDeny(input: DocInput): Decision {
-  return post("/api/deny", {
+/** `discardFeedback`: the confirmed "Approve, discard …" row, a bare approval. */
+// packages/editor/App.tsx:4523 handleApprove
+export function planApprove(input: DocInput, options?: { discardFeedback?: boolean }): Decision {
+  const agentSwitch = effectiveAgent(input, "plan");
+  return post(withDraftClient("/api/approve", input.clientId), {
     draftGeneration: nextGeneration(input),
     ...planRevisionField(input.session),
-    ...planDenyFeedbackFields(docFeedback(input), false),
-    planSave: PLAN_SAVE_DEFAULT,
-  }, input.session);
+    ...(input.session.origin === "claude-code" ? { permissionMode: permissionMode(input) } : {}),
+    ...(agentSwitch ? { agentSwitch } : {}),
+    planSave: planSave(input),
+    ...(!options?.discardFeedback && hasDocFeedback(input) ? { feedback: docFeedback(input) } : {}),
+  }, input);
 }
 
-// packages/editor/App.tsx:4630 handleAnnotateFeedback
-export function annotateSend(input: DocInput): Decision {
-  const feedback = docFeedback(input);
-  return post("/api/feedback", {
+// packages/editor/App.tsx:4648 handleDeny
+export function planDeny(input: DocInput): Decision {
+  return post(withDraftClient("/api/deny", input.clientId), {
+    draftGeneration: nextGeneration(input),
+    ...planRevisionField(input.session),
+    ...planDenyFeedbackFields(docFeedback(input), answersOnly(input)),
+    planSave: planSave(input),
+  }, input);
+}
+
+/** `discard`: the confirmed "Done, discard …" row; the agent reads the no-feedback sentence. */
+// packages/editor/App.tsx:4725 handleAnnotateFeedback
+export function annotateSend(input: DocInput, options?: { discard?: boolean }): Decision {
+  const discard = options?.discard === true;
+  const feedback = discard ? ANNOTATE_NO_FEEDBACK_SENTENCE : docFeedback(input);
+  return post(withDraftClient("/api/feedback", input.clientId), {
     draftGeneration: nextGeneration(input),
     feedback,
-    annotations: input.annotations,
+    annotations: discard ? [] : input.annotations,
     codeAnnotations: [],
     ...(EMPTY_FEEDBACK_SENTINELS.has(feedback) ? { nothingToSend: true } : {}),
-  }, input.session);
+  }, input);
 }
 
-// packages/editor/App.tsx:4728 handleAnnotateApprove
-export function annotateApprove(input: DocInput): Decision {
+/** `discard`: the confirmed "Approve, discard …" row of a gate session. */
+// packages/editor/App.tsx:4823 handleAnnotateApprove, annotateSubmission.ts:43 buildAnnotateApprovalBody
+export function annotateApprove(input: DocInput, options?: { discard?: boolean }): Decision {
+  const path = withDraftClient("/api/approve", input.clientId);
   const draftGeneration = nextGeneration(input);
-  if (input.session.approvalNotesSupported !== true) return post("/api/approve", { draftGeneration }, input.session);
-  return post("/api/approve", {
+  if (input.session.approvalNotesSupported !== true) return post(path, { draftGeneration }, input);
+  const discard = options?.discard === true;
+  return post(path, {
     draftGeneration,
-    feedback: hasDocFeedback(input) ? docFeedback(input) : "",
-    annotations: input.annotations,
+    feedback: !discard && hasDocFeedback(input) ? docFeedback(input) : "",
+    annotations: discard ? [] : input.annotations,
     codeAnnotations: [],
-  }, input.session);
+  }, input);
 }
 
-// packages/editor/App.tsx:4788 handleAnnotateExit
+// packages/editor/App.tsx:4883 handleAnnotateExit
 export function annotateExit(input: DocInput): Decision {
-  return {
-    method: "POST",
-    path: withServerSessionQuery(`/api/exit?draftGeneration=${nextGeneration(input)}`, input.session),
-  };
+  const path = withServerSessionQuery(`/api/exit?draftGeneration=${nextGeneration(input)}`, input.session);
+  return { method: "POST", path: withDraftClient(path, input.clientId) };
 }
 
-// packages/review-editor/App.tsx:1724 activeWorktreePath / activeDiffBase
+// packages/review-editor/App.tsx:1926 activeWorktreePath / activeDiffBase
 const WORKTREE_SUB_TYPES = ["since-base", "local-vs-remote", "uncommitted", "staged", "unstaged", "last-commit", "branch", "merge-base", "all"];
 function splitDiffType(diffType: string): { worktreePath: string | null; base: string } {
   if (!diffType.startsWith("worktree:")) return { worktreePath: null, base: diffType };
@@ -211,7 +313,7 @@ function splitDiffType(diffType: string): { worktreePath: string | null; base: s
   return { worktreePath: rest, base: "uncommitted" };
 }
 
-// packages/review-editor/App.tsx:3989 feedbackDiffContext
+// packages/review-editor/App.tsx:4539 feedbackDiffContext, :1953 activeCommitContext, :2931 committedBase
 function feedbackDiffContext(session: DiffSession) {
   if (session.prMetadata) return undefined;
   const { worktreePath, base } = splitDiffType(session.diffType || "uncommitted");
@@ -230,7 +332,7 @@ function feedbackDiffContext(session: DiffSession) {
   };
 }
 
-// packages/review-editor/App.tsx:4004 prReviewScopeLabel
+// packages/review-editor/App.tsx:4554 prReviewScopeLabel
 function prReviewScopeLabel(session: DiffSession): string | undefined {
   const pr = session.prMetadata;
   if (!pr || !session.prStackInfo) return undefined;
@@ -240,62 +342,215 @@ function prReviewScopeLabel(session: DiffSession): string | undefined {
 }
 
 /** The `feedback` markdown the agent receives for a review session. */
-// packages/review-editor/App.tsx:4225 feedbackMarkdown
+// packages/review-editor/App.tsx:4789 feedbackMarkdown
 export function reviewFeedback(input: ReviewInput): string {
   const { session } = input;
   return exportReviewFeedback(input.annotations, session.prMetadata, feedbackDiffContext(session), prReviewScopeLabel(session));
 }
 
-// packages/review-editor/App.tsx:4272 handleSendFeedback, :4343 handleApprove
-export function reviewSend(input: ReviewInput & { approved: boolean }): Decision {
-  const { session } = input;
+// packages/review-editor/App.tsx:730 feedbackUrl, :731 exitUrl (the id is not URL-encoded there)
+const reviewDecisionPath = (path: string, clientId: string | undefined) => (clientId ? `${path}?client=${clientId}` : path);
+
+/**
+ * `approved: false` sends the feedback. `approved: true` is the bare Approve
+ * unless `note` ("Approve with a note…") or `withAnnotations` ("Approve with
+ * notes") says what rides along.
+ */
+// packages/review-editor/App.tsx:4836 handleSendFeedback, :4907 handleApprove
+export function reviewSend(input: ReviewInput & { approved: boolean; note?: string; withAnnotations?: boolean }): Decision {
+  const path = reviewDecisionPath("/api/feedback", input.clientId);
   const draftGeneration = nextGeneration(input);
   if (input.approved) {
-    const withAnnotations = session.approvalNotesSupported === true && input.annotations.length > 0;
-    return post("/api/feedback", buildReviewApprovalBody({
+    return post(path, buildReviewApprovalBody({
       draftGeneration,
-      withAnnotations,
+      note: input.note,
+      withAnnotations: input.withAnnotations === true,
       feedbackMarkdown: reviewFeedback(input),
       annotations: input.annotations,
-    }), session);
+    }), input);
   }
-  const agentSwitch = effectiveAgent(session, "review");
-  return post("/api/feedback", {
+  const agentSwitch = effectiveAgent(input, "review");
+  return post(path, {
     draftGeneration,
     approved: false,
     feedback: reviewFeedback(input),
     annotations: input.annotations,
     ...(agentSwitch ? { agentSwitch } : {}),
-  }, session);
+  }, input);
 }
 
-const isReview = (input: DocInput | ReviewInput): input is ReviewInput => !("blocks" in input);
+/** The review header's Close. */
+// packages/review-editor/App.tsx:4880 handleExit
+export function reviewExit(input: ReviewInput): Decision {
+  const exitUrl = input.clientId ? `/api/exit?client=${input.clientId}&` : "/api/exit?";
+  return { method: "POST", path: withServerSessionQuery(`${exitUrl}draftGeneration=${nextGeneration(input)}`, input.session) };
+}
+
+/** The decision control's input, derived as the web app derives it. */
+// packages/editor/App.tsx:6553 annotateDecisionSpec, :6618 planDecisionSpec; review-editor/App.tsx:5089 reviewDecisionSpec
+export function decisionSpecInput(kind: DecisionApp, input: DocInput | ReviewInput): DecisionSpecInput {
+  const approvalNotesSupported = input.session.approvalNotesSupported === true;
+  if (kind === "review") {
+    const count = input.annotations.length;
+    return { app: "review", gate: true, count, hasFeedback: count > 0, approvalNotesSupported };
+  }
+  const doc = input as DocInput;
+  const count = docFeedbackCount(doc);
+  if (kind === "annotate") {
+    return { app: "annotate", gate: doc.session.gate === true, count, hasFeedback: count > 0, approvalNotesSupported, feedbackDelivered: false };
+  }
+  return {
+    app: "plan",
+    gate: true,
+    count,
+    hasFeedback: count > 0,
+    approvalNotesSupported,
+    plan: {
+      answers: countQuestionAnswers([doc.annotations]),
+      directEdits: false,
+      answersOnly: answersOnly(doc),
+      agentName: getAgentName(doc.session.origin),
+      approveTarget: doc.session.origin === "opencode" ? doc.approveTarget : undefined,
+    },
+  };
+}
+
+// packages/editor/App.tsx:6466 commitSubmitNote
+function documentNote(input: DocInput, text: string): Annotation | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  return {
+    id: generateId("global-note"),
+    blockId: "",
+    startOffset: 0,
+    endOffset: 0,
+    type: "GLOBAL_COMMENT",
+    text: trimmed,
+    originalText: "",
+    createdA: Date.now(),
+    author: identity(input),
+  } as Annotation;
+}
+
+// packages/review-editor/App.tsx:5010 commitReviewNote
+function reviewNote(input: ReviewInput, text: string): CodeAnnotation | null {
+  const note = createGeneralReviewComment(text, identity(input));
+  if (note && input.session.localDraftTarget) note.localReviewTarget = input.session.localDraftTarget;
+  return note;
+}
+
+/** A sent document decision clears the session draft (useAnnotationDraft dismissDraft). */
+const thenDismiss = (input: DocInput, decision: Decision): Decision[] => [decision, draftDismiss(input)];
+
+/**
+ * The requests one DecisionActionId sends, with `note` the composer's text
+ * for the ids whose spec item has a composer. Null when a composer note is
+ * blank: the web sends nothing then.
+ */
+// packages/editor/App.tsx:6596 runPlanDecisionAction, :6516 runAnnotateDecisionAction, :6421 submitPrimaryDecision,
+// :6380 dispatchPendingDecision; review-editor/App.tsx:5056 runReviewDecisionAction, :4983 submitPrimaryDecision
+export function decisionRequest(id: DecisionActionId, input: DocInput | ReviewInput, note?: string): DecisionRequest | null {
+  if (isReview(input)) {
+    const action = resolveReviewDecisionAction(id);
+    switch (action.kind) {
+      case "primary":
+        return { requests: [reviewSend({ ...input, approved: input.annotations.length === 0 })] };
+      case "note": {
+        const added = reviewNote(input, note ?? "");
+        if (!added) return null;
+        return { requests: [reviewSend({ ...input, annotations: [...input.annotations, added], approved: false })], note: added };
+      }
+      case "discard":
+        return { requests: [reviewSend({ ...input, approved: true })] };
+      case "approve-with-notes":
+        if (!action.withAnnotations && !note?.trim()) return null;
+        return { requests: [reviewSend({ ...input, approved: true, note, withAnnotations: action.withAnnotations })] };
+    }
+  }
+
+  const withNote = (): { doc: DocInput; added: Annotation } | null => {
+    const added = documentNote(input, note ?? "");
+    return added ? { doc: { ...input, annotations: [...input.annotations, added] }, added } : null;
+  };
+
+  if (decisionApp(input) === "plan") {
+    const action = resolvePlanDecisionAction(id);
+    switch (action.kind) {
+      case "primary":
+        return { requests: [hasDocFeedback(input) ? planDeny(input) : planApprove(input)] };
+      case "note": {
+        const n = withNote();
+        if (!n) return null;
+        return { requests: [action.route === "approve" ? planApprove(n.doc) : planDeny(n.doc)], note: n.added };
+      }
+      case "approve":
+        return { requests: [planApprove(input, { discardFeedback: action.discardFeedback })] };
+    }
+  }
+
+  const gate = input.session.gate === true;
+  const action = resolveAnnotateDecisionAction(id, { gate });
+  switch (action.kind) {
+    case "primary":
+      return { requests: thenDismiss(input, gate && !hasDocFeedback(input) ? annotateApprove(input) : annotateSend(input)) };
+    case "note": {
+      const n = withNote();
+      if (!n) return null;
+      return { requests: thenDismiss(n.doc, action.route === "approve" ? annotateApprove(n.doc) : annotateSend(n.doc)), note: n.added };
+    }
+    case "approve-with-notes":
+      return { requests: thenDismiss(input, annotateApprove(input)) };
+    case "discard":
+      return { requests: thenDismiss(input, action.route === "approve" ? annotateApprove(input, { discard: true }) : annotateSend(input, { discard: true })) };
+  }
+}
+
+const isReview = (input: { session: unknown; blocks?: unknown }): input is ReviewInput => !("blocks" in input);
+
+// packages/review-editor/utils/localReviewDraft.ts:25 localReviewDraftTransport; a PR review
+// (no localDraftTarget) keeps packages/ui/hooks/useAnnotationDraft.ts:69 default transport.
+function draftPath(input: { session?: Record<string, any>; clientId?: string }): string {
+  const target = input.session?.localDraftTarget;
+  if (typeof target !== "string" || !target) return "/api/draft";
+  const client = input.clientId ? `&client=${encodeURIComponent(input.clientId)}` : "";
+  return `/api/draft?target=${encodeURIComponent(target)}${client}`;
+}
+const draftDeletePath = (input: { session?: Record<string, any>; clientId?: string }, generation: number) => {
+  const path = draftPath(input);
+  return `${path}${path.includes("?") ? "&" : "?"}generation=${generation}`;
+};
+
+/** The `/api/draft` read the web app makes on load; pass the answer to `draftRestore`. */
+// packages/ui/hooks/useAnnotationDraft.ts:393, useCodeAnnotationDraft.ts:212 load draft on mount
+export function draftLoad(input: { session?: Record<string, any>; clientId?: string }): Decision {
+  return { method: "GET", path: draftPath(input) };
+}
 
 /** The `/api/draft` request the web app sends after an annotation change. */
-// packages/ui/hooks/useAnnotationDraft.ts:421 persistNow, useCodeAnnotationDraft.ts:229 autosave
+// packages/ui/hooks/useAnnotationDraft.ts:484 persistNow, useCodeAnnotationDraft.ts:289 persist
 export function draftSave(input: DocInput | ReviewInput): Decision {
   const draftGeneration = nextGeneration(input);
   const globalAttachments = isReview(input) ? [] : input.globalAttachments ?? [];
   if (input.annotations.length === 0 && globalAttachments.length === 0) {
-    return { method: "DELETE", path: `/api/draft?generation=${draftGeneration}`, draftGeneration };
+    return { method: "DELETE", path: draftDeletePath(input, draftGeneration), draftGeneration };
   }
   const body = isReview(input)
     ? { codeAnnotations: input.annotations, descriptionAnnotations: [], commentAnnotations: [], draftGeneration, ts: Date.now() }
     : { annotations: input.annotations, codeAnnotations: [], globalAttachments, draftGeneration, ts: Date.now() };
-  return { method: "POST", path: "/api/draft", body, draftGeneration };
+  return { method: "POST", path: draftPath(input), body, draftGeneration };
 }
 
-// packages/ui/hooks/useAnnotationDraft.ts:555 dismissDraft
-export function draftDismiss(input: { draftGeneration?: number }): Decision {
+// packages/ui/hooks/useAnnotationDraft.ts:618 dismissDraft, useCodeAnnotationDraft.ts:383 dismissDraft
+export function draftDismiss(input: { draftGeneration?: number; session?: Record<string, any>; clientId?: string }): Decision {
   const draftGeneration = nextGeneration(input);
-  return { method: "DELETE", path: `/api/draft?generation=${draftGeneration}`, draftGeneration };
+  return { method: "DELETE", path: draftDeletePath(input, draftGeneration), draftGeneration };
 }
 
 const readGeneration = (value: unknown): number | null =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 
 /** Reads any `/api/draft` answer (200 draft, 404 or 409 refusal) and adopts the server's generation. */
-// packages/ui/hooks/useAnnotationDraft.ts:336, useCodeAnnotationDraft.ts:182 load draft on mount
+// packages/ui/hooks/useAnnotationDraft.ts:393, useCodeAnnotationDraft.ts:212 load draft on mount
 export function draftRestore(draft: unknown, draftGeneration = 0): RestoredDraft {
   const data = (draft && typeof draft === "object" ? draft : {}) as Record<string, unknown>;
   const generation = readGeneration(data.draftGeneration);
