@@ -25,12 +25,14 @@ So compatibility means **the wire, not the pixels**:
 bin/plannotator-herdr      launcher + wrapper (one script, two modes)
 mod/main.js                View: loads the session, picks the mode view
 mod/api.js                 HTTP client for one Plannotator session
+mod/decision.js            Plannotator's DecisionControl, drawn from upstream's DecisionSpec
 mod/doc/                   plan + annotate document view (markdown blocks)
 mod/review/                code review view (diff)
 mod/vendor/plannotator.js  GENERATED. bun bundle of upstream export/parse code
 vendor-src/entry.ts        the bundle's entry: re-exports + payload builders
 tools/update-vendor.sh     checks out the installed CLI's tag, runs build-vendor.ts
-tests/                     parity tests (bun test): vendor output == upstream
+tests/                     builder tests, CLI e2e (e2e.ts), pane e2e (pane-e2e.sh)
+skill/plannotator-herdr/   the agent skill install.sh links into ~/.claude/skills
 ```
 
 ### Launcher (`bin/plannotator-herdr`)
