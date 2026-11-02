@@ -54,6 +54,7 @@ export default class Plannotator extends View {
         await this.restoreDraft();
         this.state = { name: "ready" };
         cx.timer.every(LIVENESS_MS, (cx) => this.checkAlive(cx));
+        this.replayDecision(cx);
       } catch (e) {
         this.state = { name: "error", message: String(e?.message ?? e) };
       }
@@ -191,6 +192,14 @@ export default class Plannotator extends View {
     this.confirmClose = false;
     const request = this.session.kind === "review" ? P.reviewExit(this.input()) : P.annotateExit(this.input());
     this.submit({ requests: [request] }, cx);
+  }
+
+  // Dev only: props().decide = [actionId, note?] (or ["exit"]) presses the
+  // header after the view's own script replay, for tests on a screen nobody clicks.
+  replayDecision(cx) {
+    const step = props()?.decide;
+    if (!step) return;
+    cx.timer.after(2500, (cx) => (step[0] === "exit" ? this.exit(cx) : this.decide(step[0], step[1], cx)));
   }
 
   closePane() {
