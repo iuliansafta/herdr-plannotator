@@ -283,11 +283,12 @@ export class DocumentView {
     const deleted = a?.type === "DELETION";
     const segs = (tok.show ??= shownSegs(tok));
     const ref = { blockId: this.doc.units[tok.b].block.id, i: tok.i };
-    let el = (segs.length === 1 ? this.seg(t, segs[0], deleted, div()) : h_flex())
+    let el = (segs.length === 1 ? this.seg(t, segs[0], deleted, div()) : h_flex().items_center())
       .id(`doc-t${k}`)
       .flex_none()
       .on_mouse_down("left", (e, cx) => {
         cx.stop_propagation();
+        this.focus.focus();
         if (e.click_count >= 2) this.selectWord(ref, cx);
         else this.press(ref, cx);
       })
@@ -314,7 +315,7 @@ export class DocumentView {
     const sel = span(this.sel);
     return h_flex()
       .flex_wrap()
-      .items_baseline()
+      .items_center()
       .cursor_text()
       .text_size(size)
       .line_height(1.65)
